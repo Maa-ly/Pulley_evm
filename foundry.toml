@@ -1,0 +1,29 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+
+
+
+remappings = [
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "blocklock-solidity/=lib/blocklock-solidity/src/"
+]
+
+# CoreDao Configuration
+
+[rpc_endpoints]
+localhost = "${LOCALCHAIN_URL}"
+basechain = "${BASE_URL}"
+base-sepolia = "${BASE_URL}"
+ethereum = "${ETHERUM_URL}"
+sonicchain = "${SONIC_URL}"
+hedera = "${HEDERA_URL}"
+avalanche = "${AVALANCHE_URL}"
+anvillocal = "${ANVIL_URL}"
+coredao = "${CORE_URL}"
+corechainlocal = "${CORE_LOCALS}"
+kaiatestnet = "${KAIA_TESTNET_URL}"
+
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
