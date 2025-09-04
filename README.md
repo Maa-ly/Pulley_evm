@@ -2,97 +2,6 @@
 
 Pulley Protocol is a DeFi trading system that enables users to participate in AI-driven trading strategies while providing insurance coverage through a floating stablecoin mechanism. The system features Chainlink price feeds, automated profit/loss distribution, and dual minting logic for insurance coverage.
 
-## System Architecture Overview
-
-```mermaid
-graph TB
-    subgraph "User Layer"
-        U[User]
-    end
-    
-    subgraph "Core Contracts"
-        TP[PuLTradingPool<br/>- Manages deposits<br/>- Mints pool tokens<br/>- Threshold mechanism]
-        PT[PulleyToken<br/>- Floating stablecoin<br/>- Insurance reserve<br/>- Growth mechanism]
-        PC[PulleyController<br/>- Fund allocation<br/>- AI trading coordination<br/>- Profit/loss handling]
-    end
-    
-    subgraph "External Systems"
-        AI[AI Trader<br/>- CFD Trading<br/>- Strategy execution]
-        BL[Blocklock<br/>- Automation<br/>- Timelock encryption]
-        CL[Chainlink<br/>- Price feeds<br/>- Oracle data]
-    end
-    
-    subgraph "Infrastructure"
-        PM[PermissionManager<br/>- Access control<br/>- Function permissions]
-    end
-    
-    U -->|Deposit assets| TP
-    TP -->|Pool tokens| U
-    TP -->|Threshold reached| PC
-    PC -->|15% insurance| PT
-    PC -->|85% trading| AI
-    AI -->|Trading results| PC
-    PC -->|Profit/loss| TP
-    BL -->|Automation| PC
-    CL -->|Price data| TP
-    PM -->|Permissions| TP
-    PM -->|Permissions| PT
-    PM -->|Permissions| PC
-```
-
-## User Flow Sequence
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant TP as TradingPool
-    participant PC as Controller
-    participant PT as PulleyToken
-    participant AI as AI Trader
-    participant BL as Blocklock
-
-    Note over U,BL: Trading Period Initiation
-    U->>TP: startTradingPeriod()
-    U->>TP: deposit(asset, amount)
-    TP->>TP: recordUserTokensForPeriod()
-    TP->>U: mint pool tokens
-
-    Note over U,BL: Threshold Reached
-    alt Threshold Reached
-        TP->>PC: sendFundsToController()
-        PC->>PC: allocate 15% insurance, 85% trading
-        PC->>PT: mint insurance tokens
-        PC->>AI: initiate trading
-        AI->>PC: reportTradingResult(requestId, pnl)
-    end
-
-    Note over U,BL: Profit/Loss Handling
-    alt Profit
-        PC->>TP: distributeTradersProfit(90%)
-        PC->>TP: end trading period
-        PC->>TP: distribute based on period participation
-        PC->>PT: mint insurance tokens (10%)
-    else Loss
-        PC->>PC: record loss(amount)
-        PC->>PC: check insurance coverage
-        alt Insurance Can Cover
-            PC->>PT: burn insurance tokens
-        else Cannot Cover
-            PC->>TP: reduce pool value
-        end
-    end
-
-    Note over U,BL: User Withdrawal
-    U->>TP: withdraw(asset, poolTokens)
-    TP->>TP: queryPendingPnL()
-    TP->>TP: apply pending losses
-    TP->>U: transfer assets
-
-    Note over U,BL: Automated Operations
-    BL->>PC: automatedProfitLossCheck()
-    BL->>PC: automatedRebalancing()
-    PC->>PC: execute automated actions
-```
 
 ## Fund Allocation Flow
 
@@ -348,20 +257,6 @@ sequenceDiagram
     TP->>U: transfer profits or reinvest
 ```
 
-## Key Improvements in Continuous Trading
-
-### Before (Blocking System)
-- Users couldn't deposit during active trading periods
-- Single trading period at a time
-- Users had to wait for period completion
-
-### After (Continuous System)
-- Users can always deposit
-- Multiple concurrent trading periods
-- Automatic period creation when thresholds are met
-- Better user experience and capital efficiency
-
-## Fund Allocation Flow
 
 ```mermaid
 flowchart TD
