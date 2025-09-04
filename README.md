@@ -204,21 +204,6 @@ classDiagram
 
 ## How It Works
 
-### Simplified System Architecture
-
-1. **TradingPool** - Users deposit funds, get minted pool tokens based on oracle pricing, threshold mechanism triggers fund transfer
-2. **PulleyToken** - Floating stablecoin that grows with utilization ), anyone can mint
-3. **PulleyTokenEngine** - Manages the floating stablecoin mechanics and growth
-4. **Controller** - Receives funds when threshold reached, allocates 15% insurance / 85% AI trading
-
-### Key Features
-- **Oracle-based Pricing**: Each asset has stored decimals for proper USD conversion
-- **Floating Stablecoin**: PulleyToken grows with utilization, not pegged 1:1
-- **Threshold Mechanism**: Automatic fund transfer when deposits reach threshold
-- **AI Trading Integration**: 85% of funds go to external AI trading system
-- **Insurance Coverage**: 15% goes to insurance, covers losses first
-- **Profit Distribution**: 10% to insurance, 90% back to trading pool
-- **Blocklock Automation**: Automated profit/loss checking and rebalancing
 
 
 
