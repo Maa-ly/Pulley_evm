@@ -142,7 +142,8 @@ contract DeployPulley is Script {
 
         
         // Deploy TradingPool
-        tradingPool = new PulTradingPool(
+        tradingPool = new PulTradingPool();
+        tradingPool.initialize(
             "Pulley Pool Token",
             "PPT",
             address(permissionManager),
@@ -156,13 +157,14 @@ contract DeployPulley is Script {
             ? address(blocklockSender) 
             : 0x0000000000000000000000000000000000000000; // Replace with actual Blocklock address
             
-        controller = new PulleyController(
+        controller = new PulleyController();
+        controller.initialize(
             address(permissionManager),
             address(tradingPool),
             address(0), // No separate insurance pool
             address(pulleyToken),
-            supportedAssets,
-            blocklockAddress
+            address(0), // AI trader
+            supportedAssets
         );
         console.log("Controller:", address(controller));
     }
@@ -198,8 +200,8 @@ contract DeployPulley is Script {
         // Grant operational permissions
         permissionManager.grantPermission(address(controller), PulTradingPool.recordProfit.selector);
         permissionManager.grantPermission(address(controller), PulTradingPool.recordLoss.selector);
-        permissionManager.grantPermission(address(controller), PulTradingPool.distributeTradersProfit.selector);
-        permissionManager.grantPermission(address(controller), PulTradingPool.startTradingPeriod.selector);
+        permissionManager.grantPermission(address(controller), PulTradingPool.distributePeriodProfit.selector);
+        permissionManager.grantPermission(address(controller), PulTradingPool.recordPeriodLoss.selector);
         
         permissionManager.grantPermission(address(tradingPool), PulleyController.receiveFunds.selector);
         permissionManager.grantPermission(AI_TRADER, PulleyController.reportTradingResult.selector);
@@ -218,17 +220,17 @@ contract DeployPulley is Script {
         
         if (block.chainid == 31337 || block.chainid == 11155111) {
             // Add mock assets
-            tradingPool.addAsset(address(usdc), 6);
-            tradingPool.addAsset(address(usdt), 6);
-            tradingPool.addAsset(address(weth), 18);
+            tradingPool.addAsset(address(usdc), 6, 1000e6, address(0));
+            tradingPool.addAsset(address(usdt), 6, 1000e6, address(0));
+            tradingPool.addAsset(address(weth), 18, 1e18, address(0));
             
             // For testing, we can skip price feeds or use mock ones
             console.log("Mock assets configured");
         } else {
             // Mainnet configuration
-            tradingPool.addAsset(0xa0b86A33e6411c4d7C0A0F6a1b5b1c0D1E2F3456, 6); // USDC
-            tradingPool.addAsset(0xdAC17F958D2ee523a2206206994597C13D831ec7, 6); // USDT
-            tradingPool.addAsset(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2, 18); // WETH
+            tradingPool.addAsset(0xa0b86A33e6411c4d7C0A0F6a1b5b1c0D1E2F3456, 6, 1000e6, address(0)); // USDC
+            tradingPool.addAsset(0xdAC17F958D2ee523a2206206994597C13D831ec7, 6, 1000e6, address(0)); // USDT
+            tradingPool.addAsset(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2, 18, 1e18, address(0)); // WETH
             
             // Set Chainlink price feeds
             tradingPool.setPriceFeed(0xa0b86A33e6411c4d7C0A0F6a1b5b1c0D1E2F3456, USDC_USD_FEED);
@@ -246,9 +248,8 @@ contract DeployPulley is Script {
         tradingPool.updateThreshold(THRESHOLD);
         console.log("Threshold set to:", THRESHOLD);
         
-        // Start first trading period
-        tradingPool.startTradingPeriod();
-        console.log("First trading period started");
+        // Trading periods now start automatically when thresholds are reached
+        console.log("Trading periods will start automatically when thresholds are reached");
         
         // Fund controller for automation (if needed)
         if (address(controller).balance == 0) {

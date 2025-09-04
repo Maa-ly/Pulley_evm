@@ -10,6 +10,7 @@ import {PulleyToken} from "../src/Token/PulleyToken.sol";
 
 import {PulTradingPool} from "../src/Pool/PuLTradingPool.sol";
 import {PulleyController} from "../src/PulleyController.sol";
+import {DataTypes} from "../src/libraries/DataTypes.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockBlocklockSender} from "./mocks/MockBlocklockSender.sol";
 
@@ -83,25 +84,17 @@ contract PulleyProtocolTest is Test {
         
 
         
-        tradingPool = new PulTradingPool(
-            "Pulley Pool Token",
-            "PPT",
-            address(permissionManager),
-            address(0), // Controller set later
-            address(0)  // PulleyToken set later
-        );
-        
-        controller = new PulleyController(
-            address(permissionManager),
-            address(tradingPool),
-            address(0), // No separate insurance pool
-            address(pulleyToken),
-            supportedAssets,
-            address(blocklockSender)
-        );
+        tradingPool = new PulTradingPool();
+        controller = new PulleyController();
     }
     
     function _configureContracts() internal {
+        // Prepare supported assets for controller initialization
+        address[] memory supportedAssets = new address[](3);
+        supportedAssets[0] = address(usdc);
+        supportedAssets[1] = address(usdt);
+        supportedAssets[2] = address(weth);
+        
         // Set contract relationships
         pulleyToken.setContracts(
             address(0), 
@@ -114,10 +107,28 @@ contract PulleyProtocolTest is Test {
         
         controller.setAITrader(aiTrader);
         
+        // Initialize contracts
+        tradingPool.initialize(
+            "Pulley Pool Token",
+            "PPT",
+            address(permissionManager),
+            address(controller),
+            address(pulleyToken)
+        );
+        
+        controller.initialize(
+            address(permissionManager),
+            address(tradingPool),
+            address(0), // No separate insurance pool
+            address(pulleyToken),
+            address(0), // AI Trader set later
+            supportedAssets
+        );
+        
         // Add assets to trading pool
-        tradingPool.addAsset(address(usdc), 6);
-        tradingPool.addAsset(address(usdt), 6);
-        tradingPool.addAsset(address(weth), 18);
+        tradingPool.addAsset(address(usdc), 6, 1000 * 1e6, address(0));
+        tradingPool.addAsset(address(usdt), 6, 1000 * 1e6, address(0));
+        tradingPool.addAsset(address(weth), 18, 1 * 1e18, address(0));
         
         // Set threshold
         tradingPool.updateThreshold(THRESHOLD);
@@ -135,8 +146,8 @@ contract PulleyProtocolTest is Test {
         // Operational permissions
         permissionManager.grantPermission(address(controller), PulTradingPool.recordProfit.selector);
         permissionManager.grantPermission(address(controller), PulTradingPool.recordLoss.selector);
-        permissionManager.grantPermission(address(controller), PulTradingPool.distributeTradersProfit.selector);
-        permissionManager.grantPermission(address(controller), PulTradingPool.startTradingPeriod.selector);
+        permissionManager.grantPermission(address(controller), PulTradingPool.distributePeriodProfit.selector);
+        permissionManager.grantPermission(address(controller), PulTradingPool.recordPeriodLoss.selector);
         
         permissionManager.grantPermission(address(tradingPool), PulleyController.receiveFunds.selector);
         permissionManager.grantPermission(aiTrader, PulleyController.reportTradingResult.selector);
@@ -203,12 +214,12 @@ contract PulleyProtocolTest is Test {
     }
     
     function testTradingPeriodMechanism() public {
-        // Start a trading period
-        vm.prank(address(controller));
-        tradingPool.startTradingPeriod();
+        // Start a trading period by reaching threshold
+        vm.prank(user1);
+        tradingPool.deposit(address(usdc), 1000e6); // 1000 USDC reaches threshold
         
-        uint256 currentPeriod = tradingPool.currentPeriodId();
-        assertEq(currentPeriod, 1);
+        uint256[] memory activePeriods = tradingPool.getActivePeriods(address(usdc));
+        assertTrue(activePeriods.length > 0);
         
         // Deposit during active period
         uint256 depositAmount = 3000 * 1e6; // 3000 USDC
@@ -218,12 +229,14 @@ contract PulleyProtocolTest is Test {
         vm.stopPrank();
         
         // Verify user is recorded for this period
-        (uint256 startTime, uint256 endTime, uint256 totalTokens, bool isActive, bool profitsDistributed) = 
-            tradingPool.tradingPeriods(currentPeriod);
+        uint256[] memory currentActivePeriods = tradingPool.getActivePeriods(address(usdc));
+        uint256 currentPeriod = currentActivePeriods[0];
+        (uint256 startTime, uint256 endTime, uint256 totalContributions, bool isActive, int256 pnl) = 
+            tradingPool.getPeriodInfo(address(usdc), currentPeriod);
         
         assertTrue(isActive);
-        assertGt(totalTokens, 0);
-        console.log("Trading period started with total tokens:", totalTokens);
+        assertGt(totalContributions, 0);
+        console.log("Trading period started with total contributions:", totalContributions);
     }
     
     function testThresholdMechanism() public {
@@ -245,9 +258,9 @@ contract PulleyProtocolTest is Test {
     }
     
     function testProfitDistribution() public {
-        // Setup: Start trading period and make deposits
-        vm.prank(address(controller));
-        tradingPool.startTradingPeriod();
+        // Setup: Start trading period by reaching threshold
+        vm.prank(user1);
+        tradingPool.deposit(address(usdc), 1000e6); // 1000 USDC reaches threshold
         
         uint256 depositAmount = 5000 * 1e6; // 5000 USDC
         vm.startPrank(user1);
@@ -267,7 +280,7 @@ contract PulleyProtocolTest is Test {
         emit ProfitsDistributedForPeriod(1, profitAmount);
         
         vm.prank(address(controller));
-        tradingPool.distributeTradersProfit(profitAmount);
+        tradingPool.distributePeriodProfit(address(usdc), profitAmount, 1);
         
         // Verify profit was added to pool value
         (uint256 totalValue, , uint256 profits, , ) = tradingPool.getPoolMetrics();
@@ -420,9 +433,9 @@ contract PulleyProtocolTest is Test {
     function testFullSystemWorkflow() public {
         console.log("=== Testing Full System Workflow ===");
         
-        // 1. Start trading period
-        vm.prank(address(controller));
-        tradingPool.startTradingPeriod();
+        // 1. Start trading period by reaching threshold
+        vm.prank(user1);
+        tradingPool.deposit(address(usdc), 1000e6); // 1000 USDC reaches threshold
         console.log("Trading period started");
         
         // 2. Users deposit assets
@@ -455,7 +468,7 @@ contract PulleyProtocolTest is Test {
         
         // 5. Profits distributed
         vm.prank(address(controller));
-        tradingPool.distributeTradersProfit(720 * 1e18); // 90% of profit to traders
+        tradingPool.distributePeriodProfit(address(usdc), 720 * 1e18, 1); // 90% of profit to traders
         console.log("Profits distributed to traders");
         
         // 6. User withdraws with updated value

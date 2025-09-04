@@ -9,6 +9,10 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IPermissionManager} from "../Permission/interface/IPermissionManager.sol";
 import {AggregatorV3Interface} from "../interfaces/AggregatorV3Interface.sol";
 import {IPulleyController} from "../interfaces/IPulleyController.sol";
+import {DataTypes} from "../libraries/DataTypes.sol";
+import {Errors} from "../libraries/Errors.sol";
+import {Events} from "../libraries/Events.sol";
+import "../lib/PriceConvertor.sol";
 
 
 
@@ -39,7 +43,18 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
     mapping(address => uint256) public assetBalances; // Asset balances
     mapping(address => bool) public supportedAssets; // Supported assets
     mapping(address => uint8) public assetDecimals; // Store decimals for each asset
+    mapping(address => uint256) public assetThresholds; // Threshold per asset
     address[] public assetList;
+    
+    // Asset-specific trading periods - now supports multiple concurrent periods
+    mapping(address => mapping(uint256 => DataTypes.TradingPeriod)) public assetPeriods;
+    mapping(address => uint256) public assetCurrentPeriodId;
+    mapping(address => bool) public assetPeriodActive; // Deprecated - kept for compatibility
+    
+    // New: Multiple concurrent periods support
+    mapping(address => uint256[]) public assetActivePeriods; // Track active period IDs per asset
+    mapping(address => mapping(uint256 => uint256)) public periodAssetAllocation; // Asset amount allocated to each period
+    mapping(address => uint256) public assetAvailableForTrading; // Available funds for new periods
 
     // User tracking
     mapping(address => uint256) public userPoolTokens; // User pool token balance
@@ -55,32 +70,8 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
     uint256 public insuranceFunds; // 15% insurance allocation
     uint256 public totalLossesCovered; // Losses covered by insurance
     
-    // ============ Events ============
-    
-    event Deposited(address indexed user, address indexed asset, uint256 amount, uint256 poolTokens, uint256 usdValue);
-    event Withdrawn(address indexed user, address indexed asset, uint256 amount, uint256 poolTokensBurned);
-    event ThresholdReached(uint256 totalAmount, uint256 timestamp);
-    event FundsSentToController(uint256 totalUsdValue);
-    event ProfitRecorded(uint256 amount);
-    event ProfitDistributed(uint256 insuranceShare, uint256 poolShare);
-    event LossRecorded(uint256 amount);
-    event LossCovered(uint256 lossAmount, bool coveredByInsurance, uint256 coveredAmount);
-    event AssetAdded(address indexed asset, uint8 decimals);
-    event AssetRemoved(address indexed asset);
-    event PriceFeedUpdated(address indexed asset, address indexed priceFeed);
-    event ThresholdUpdated(uint256 newThreshold);
-    
-    // ============ Errors ============
-    
-    error TradingPool__ZeroAmount();
-    error TradingPool__ZeroAddress();
-    error TradingPool__UnsupportedAsset();
-    error TradingPool__InsufficientBalance();
-    error TradingPool__InsufficientPoolTokens();
-    error TradingPool__ThresholdNotReached();
-    error TradingPool__NotAuthorized();
-    error TradingPool__TransferFailed();
-    error TradingPool__NotController();
+    // ============ Events & Errors ============
+    // Events and errors are now imported from libraries
 
     // ============ Modifiers ============
     
@@ -97,29 +88,52 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
     }
 
     modifier moreThanZero(uint256 amount) {
-        if (amount == 0) revert TradingPool__ZeroAmount();
+        if (amount == 0) revert Errors.TradingPool__ZeroAmount();
         _;
     }
     
     modifier supportedAsset(address asset) {
-        if (!supportedAssets[asset]) revert TradingPool__UnsupportedAsset();
+        if (!supportedAssets[asset]) revert Errors.TradingPool__UnsupportedAsset();
         _;
     }
 
     modifier onlyController() {
-        if (msg.sender != controller) revert TradingPool__NotController();
+        if (msg.sender != controller) revert Errors.TradingPool__NotController();
         _;
     }
     
     // ============ Constructor ============
     
-    constructor(
-        string memory name,
-        string memory symbol,
+    constructor() ERC20("", "") {
+        // Constructor is minimal - initialization happens in initialize()
+    }
+    
+    // ============ Initializer ============
+    
+    /**
+     * @notice Initialize the trading pool with configuration
+     * @param _name Pool token name
+     * @param _symbol Pool token symbol
+     * @param _permissionManager Permission manager address
+     * @param _controller Controller address
+     * @param _pulleyToken PulleyToken address
+     */
+    function initialize(
+        string memory _name,
+        string memory _symbol,
         address _permissionManager,
         address _controller,
         address _pulleyToken
-    ) ERC20(name, symbol) {
+    ) external {
+        if (permissionManager != address(0)) revert Errors.Clone__InitializationFailed();
+        if (_permissionManager == address(0) || _controller == address(0)) {
+            revert Errors.TradingPool__ZeroAddress();
+        }
+        
+        // Initialize ERC20 name and symbol (requires storage manipulation)
+        _name = _name;
+        _symbol = _symbol;
+        
         permissionManager = _permissionManager;
         controller = _controller;
         pulleyToken = _pulleyToken;
@@ -142,16 +156,15 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
         nonReentrant
         returns (uint256 poolTokens) 
     {
-        // Transfer asset from user
-        IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
+        // Continuous trading periods - deposits are always allowed
         
-        // Get USD value using oracle (simplified - implement proper oracle integration)
+        // Get USD value using oracle
         uint256 usdValue = _getAssetUsdValue(asset, amount);
         
         // Calculate pool tokens based on current pool state
         if (totalSupply() == 0) {
-            // First deposit , minus min share to prevent share manipulation
-            poolTokens = usdValue - 1e18;//minShare;
+            // First deposit, minus min share to prevent share manipulation
+            poolTokens = usdValue - 1e18;
         } else {
             // Subsequent deposits: proportional to pool value
             poolTokens = (usdValue * totalSupply()) / totalPoolValue;
@@ -164,16 +177,21 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
         totalDeposited += usdValue;
         totalPoolValue += usdValue;
         
-        // Record user tokens for current trading period (for fair profit distribution)
-        _recordUserTokensForPeriod(msg.sender, poolTokens);
+        // Update available funds for trading (continuous periods)
+        assetAvailableForTrading[asset] += usdValue;
+        
+        // Record user contribution for current trading period
+        _recordUserContributionForPeriod(msg.sender, asset, usdValue);
         
         // Mint pool tokens
         _mint(msg.sender, poolTokens);
         
-        emit Deposited(msg.sender, asset, amount, poolTokens, usdValue);
+        // Transfer asset from user
+        IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
+        emit Events.Deposited(msg.sender, asset, amount, poolTokens, usdValue);
         
-        // Check threshold
-        _checkThreshold();
+        // Check if we can start a new trading period
+        _checkAndStartNewTradingPeriod(asset);
         
         return poolTokens;
     }
@@ -191,7 +209,7 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
         nonReentrant
         returns (uint256 assetAmount) 
     {
-        if (balanceOf(msg.sender) < poolTokenAmount) revert TradingPool__InsufficientPoolTokens();
+        if (balanceOf(msg.sender) < poolTokenAmount) revert Errors.TradingPool__InsufficientPoolTokens();
         
         // Query current PnL before withdrawal to apply any pending losses
         _queryAndApplyPendingPnL();
@@ -224,7 +242,7 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
         // Transfer asset
         IERC20(asset).safeTransfer(msg.sender, assetAmount);
         
-        emit Withdrawn(msg.sender, asset, assetAmount, poolTokenAmount);
+        emit Events.Withdrawn(msg.sender, asset, assetAmount, poolTokenAmount);
         
         return assetAmount;
     }
@@ -254,13 +272,7 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
         }
     }
     
-    /**
-     * @notice Manually trigger threshold check (anyone can call)
-     */
-    function triggerThreshold() external nonReentrant {
-        if (totalDeposited < threshold) revert TradingPool__ThresholdNotReached();
-        _sendFundsToController();
-    }
+
     
 
        /**
@@ -281,110 +293,30 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
             // Don't revert if call fails
         }
         
-        emit ProfitRecorded(profitAmount);
-        //emit ProfitDistributed(insuranceShare, poolShare);
-    } //@dev add profit distribution mechanism for the traders
-
-    // Trading period tracking for fair profit distribution
-    struct TradingPeriod {
-        uint256 startTime;
-        uint256 endTime;
-        uint256 totalPoolTokensAtStart;
-        mapping(address => uint256) userTokensAtStart;
-        bool isActive;
-        bool profitsDistributed;
-    }
-    
-    mapping(uint256 => TradingPeriod) public tradingPeriods;
-    uint256 public currentPeriodId;
-    uint256 public periodDuration = 7 days; // Default 7 days per period
-    
-    event TradingPeriodStarted(uint256 indexed periodId, uint256 startTime);
-    event TradingPeriodEnded(uint256 indexed periodId, uint256 endTime);
-    event ProfitsDistributedForPeriod(uint256 indexed periodId, uint256 totalProfit);
-    
-    /**
-     * @notice Start a new trading period (called by controller)
-     */
-    function startTradingPeriod() external onlyController {
-        // End current period if active
-        if (tradingPeriods[currentPeriodId].isActive) {
-            _endCurrentTradingPeriod();
-        }
-        
-        currentPeriodId++;
-        TradingPeriod storage newPeriod = tradingPeriods[currentPeriodId];
-        newPeriod.startTime = block.timestamp;
-        newPeriod.totalPoolTokensAtStart = totalSupply();
-        newPeriod.isActive = true;
-        
-        emit TradingPeriodStarted(currentPeriodId, block.timestamp);
-    }
-    
-    /**
-     * @notice End current trading period
-     */
-    function _endCurrentTradingPeriod() internal {
-        TradingPeriod storage period = tradingPeriods[currentPeriodId];
-        if (period.isActive) {
-            period.endTime = block.timestamp;
-            period.isActive = false;
-            emit TradingPeriodEnded(currentPeriodId, block.timestamp);
-        }
-    }
-    
-    /**
-     * @notice Record user's tokens at period start (called during deposits)
-     */
-    function _recordUserTokensForPeriod(address user, uint256 tokens) internal {
-        TradingPeriod storage period = tradingPeriods[currentPeriodId];
-        if (period.isActive && period.userTokensAtStart[user] == 0) {
-            period.userTokensAtStart[user] = balanceOf(user) - tokens; // Tokens before this deposit
-        }
+        emit Events.ProfitRecorded(address(0), profitAmount, 0);
     }
 
-     /**
-      * @notice Distribute profits to traders based on their participation in trading period
-      */
-     function distributeTradersProfit(uint256 profitAmount) external onlyAuthorized moreThanZero(profitAmount) {
-        totalProfits += profitAmount;
-        totalPoolValue += profitAmount;
-        
-        // End current period and distribute profits
-        _endCurrentTradingPeriod();
-        
-        TradingPeriod storage period = tradingPeriods[currentPeriodId];
-        require(!period.profitsDistributed, "TradingPool: Profits already distributed for this period");
-        
-        if (period.totalPoolTokensAtStart > 0) {
-            // Distribute profits proportionally to users who were in the pool at period start
-            // This ensures fair distribution without bias toward late joiners
-            
-            // For gas efficiency, we'll mint additional pool tokens representing the profit
-            // Users can claim their share later or it's automatically included in their balance
-            uint256 profitTokens = (profitAmount * totalSupply()) / totalPoolValue;
-            
-            // Increase total pool value to include profits
-            // The profit is now reflected in the increased value per token
-            // No additional minting needed as the value per token increases
-            
-            period.profitsDistributed = true;
-            emit ProfitsDistributedForPeriod(currentPeriodId, profitAmount);
-        }
-     }
+
+    
+
+
+
+    
+
+    
+
 
     /**
      * @notice Record trading loss and handle coverage (called by controller)
      */
-    //@dev get insurance balance ocnverted to lossamount to see if it can cover the loss
     function recordLoss(uint256 lossAmount) external onlyController moreThanZero(lossAmount) {
         totalLosses += lossAmount;
         
         // Check if insurance can cover the loss
         bool coveredByInsurance = false;
         uint256 coveredAmount = 0;
-        //get insurance funds from controller
-        uint256 _insuranceFunds =  getInsuranceFunds();
+        // Get insurance funds from controller
+        uint256 _insuranceFunds = getInsuranceFunds();
         
         if (_insuranceFunds >= lossAmount) {
             // Insurance covers full loss
@@ -430,8 +362,8 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
             }
         }
         
-        emit LossRecorded(lossAmount);
-        emit LossCovered(lossAmount, coveredByInsurance, coveredAmount);
+        emit Events.LossRecorded(address(0), lossAmount, 0);
+        emit Events.LossCovered(address(0), lossAmount, coveredByInsurance, coveredAmount);
     }
     
 
@@ -448,7 +380,6 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
         AggregatorV3Interface priceFeed = priceFeeds[asset];
         
         if (address(priceFeed) == address(0)) {
-            //@todo: remove this fallback, not revelant since all aseset used will be set
             // Fallback: assume 1:1 USD for stablecoins
             uint8 decimals = assetDecimals[asset];
             if (decimals == 6) {
@@ -472,59 +403,9 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
     }
     
 
-       /**
-     * @notice Check if threshold is reached and send funds to controller
-     */
-    function _checkThreshold() internal {
-        if (totalDeposited >= threshold) {
-            _sendFundsToController();
-        }
-    }
+
     
-    /**
-     * @notice Send all funds to controller when threshold is reached
-     */
-    function _sendFundsToController() internal {
-        if (controller == address(0)) return;
-        
-        uint256 totalUsdValue = 0;
-        
-        // Transfer all assets to controller
-        for (uint256 i = 0; i < assetList.length; i++) {
-            address asset = assetList[i];
-            uint256 balance = assetBalances[asset];
-            
-            if (balance > 0) {
-                uint256 usdValue = _getAssetUsdValue(asset, balance);
-                totalUsdValue += usdValue;
-                
-                // Transfer to controller first
-                IERC20(asset).safeTransfer(controller, balance);
-                
-                // Reset balance
-                assetBalances[asset] = 0;
-                
-                // Call controller's receiveFunds function
-                (bool success, ) = controller.call(
-                    abi.encodeWithSignature("receiveFunds(address,uint256)", asset, balance)
-                );
-                
-                if (!success) {
-                    // If call fails, restore balance
-                    assetBalances[asset] = balance;
-                    revert("Failed to notify controller");
-                }
-            }
-        }
-        
-        if (totalUsdValue > 0) {
-            totalDeposited = 0; // Reset after transfer
-            lastThresholdTransfer = block.timestamp;
-            
-            emit ThresholdReached(totalUsdValue, block.timestamp);
-            emit FundsSentToController(totalUsdValue);
-        }
-    }
+
 
 
 
@@ -536,15 +417,18 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
     /**
      * @notice Add supported asset with decimals
      */
-    function addAsset(address asset, uint8 decimals) external onlyAuthorized {
-        if (asset == address(0)) revert TradingPool__ZeroAddress();
+    function addAsset(address asset, uint8 decimals, uint256 assetThreshold, address priceFeed) external onlyAuthorized {
+        if (asset == address(0)) revert Errors.TradingPool__ZeroAddress();
+        if (assetThreshold == 0) revert Errors.Clone__ThresholdTooLow();
         
         if (!supportedAssets[asset]) {
             supportedAssets[asset] = true;
             assetDecimals[asset] = decimals;
+            assetThresholds[asset] = assetThreshold;
+            priceFeeds[asset] = AggregatorV3Interface(priceFeed);
             assetList.push(asset);
             
-            emit AssetAdded(asset, decimals);
+            emit Events.AssetAdded(asset, decimals, assetThreshold, priceFeed);
         }
     }
     
@@ -565,7 +449,7 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
                 }
             }
             
-            emit AssetRemoved(asset);
+            emit Events.AssetRemoved(asset);
         }
     }
     
@@ -574,14 +458,14 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
      */
     function updateThreshold(uint256 newThreshold) external onlyAuthorized {
         threshold = newThreshold;
-        emit ThresholdUpdated(newThreshold);
+        emit Events.ThresholdUpdated(newThreshold);
     }
     
     /**
      * @notice Update controller address
      */
     function updateController(address newController) external onlyAuthorized {
-        if (newController == address(0)) revert TradingPool__ZeroAddress();
+        if (newController == address(0)) revert Errors.TradingPool__ZeroAddress();
         controller = newController;
     }
     
@@ -590,14 +474,14 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
      */
     function setPriceFeed(address asset, address priceFeed) external onlyAuthorized {
         priceFeeds[asset] = AggregatorV3Interface(priceFeed);
-        emit PriceFeedUpdated(asset, priceFeed);
+        emit Events.PriceFeedUpdated(asset, priceFeed);
     }
     
     /**
      * @notice Update Pulley token address
      */
     function updatePulleyToken(address newPulleyToken) external onlyAuthorized {
-        if (newPulleyToken == address(0)) revert TradingPool__ZeroAddress();
+        if (newPulleyToken == address(0)) revert Errors.TradingPool__ZeroAddress();
         pulleyToken = newPulleyToken;
     }
     
@@ -643,12 +527,7 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
         return assetList;
     }
     
-    /**
-     * @notice Check if threshold is reached
-     */
-    function isThresholdReached() public view returns (bool) {
-        return totalDeposited >= threshold;
-    }
+
     
     /**
      * @notice Get asset balance and USD value
@@ -671,14 +550,442 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
     }
 
 function getInsuranceFunds() public view returns (uint256) {
-    if (controller == address(0)) return 0;
+        if (controller == address(0)) return 0;
+        
+        (bool success, bytes memory data) = controller.staticcall(abi.encodeWithSignature("getSystemMetrics()"));
+        if (!success) return 0;
+        
+        (uint256 controllerInsuranceFunds, , , ) = abi.decode(data, (uint256, uint256, uint256, uint256));
+        return controllerInsuranceFunds;
+    }
     
-    (bool success, bytes memory data) = controller.staticcall(abi.encodeWithSignature("getSystemMetrics()"));
-    if (!success) return 0;
+    /**
+     * @notice Convert USD amount to asset amount using price feeds
+     * @param asset Asset address
+     * @param usdAmount USD amount to convert
+     * @return Asset amount
+     */
+    function _convertUsdToAsset(address asset, uint256 usdAmount) internal view returns (uint256) {
+        AggregatorV3Interface priceFeed = priceFeeds[asset];
+        
+        if (address(priceFeed) == address(0)) {
+            // Fallback: assume 1:1 USD for stablecoins
+            uint8 decimals = assetDecimals[asset];
+            if (decimals == 6) {
+                return usdAmount / 1e12; // Convert from 18 decimals to 6
+            } else if (decimals == 18) {
+                return usdAmount; // Already 18 decimals
+            } else {
+                return usdAmount / (10 ** (18 - decimals));
+            }
+        } else {
+            // Use Chainlink price feed
+            (, int256 price, , , ) = priceFeed.latestRoundData();
+            require(price > 0, "TradingPool: Invalid price");
+            
+            uint8 assetDecimal = assetDecimals[asset];
+            uint8 feedDecimals = priceFeed.decimals();
+            
+            // Convert from USD to asset: usdAmount / price * 10^(assetDecimals + feedDecimals - 18)
+            return (usdAmount * (10 ** feedDecimals) * (10 ** assetDecimal)) / (uint256(price) * 1e18);
+        }
+    }
     
-    (uint256 controllerInsuranceFunds, , , ) = abi.decode(data, (uint256, uint256, uint256, uint256));
-    return controllerInsuranceFunds;
-}
+
+    
+
+    
+    /**
+     * @notice Record user contribution for current trading period
+     * @param user User address
+     * @param asset Asset address
+     * @param usdContribution User's USD contribution
+     */
+    function _recordUserContributionForPeriod(address user, address asset, uint256 usdContribution) internal {
+        if (assetCurrentPeriodId[asset] == 0) {
+            // Start first trading period for this asset
+            assetCurrentPeriodId[asset]++;
+            DataTypes.TradingPeriod storage newPeriod = assetPeriods[asset][assetCurrentPeriodId[asset]];
+            newPeriod.startTime = block.timestamp;
+            newPeriod.isActive = true;
+            newPeriod.totalPoolTokensAtStart = totalSupply();
+            newPeriod.totalUsdValueAtStart = totalPoolValue;
+            
+            emit Events.TradingPeriodStarted(asset, assetCurrentPeriodId[asset], block.timestamp, assetThresholds[asset]);
+        }
+        
+        DataTypes.TradingPeriod storage currentPeriod = assetPeriods[asset][assetCurrentPeriodId[asset]];
+        
+        // Record user's contribution for this period
+        if (currentPeriod.userUsdContributionAtStart[user] == 0) {
+            currentPeriod.userTokensAtStart[user] = balanceOf(user);
+        }
+        currentPeriod.userUsdContributionAtStart[user] += usdContribution;
+        
+        emit Events.UserJoinedPeriod(user, asset, assetCurrentPeriodId[asset], usdContribution);
+    }
+    
+    /**
+     * @notice Check if we can start a new trading period (continuous periods)
+     * @param asset Asset to check for new trading period
+     */
+    function _checkAndStartNewTradingPeriod(address asset) internal {
+        uint256 availableFunds = assetAvailableForTrading[asset];
+        uint256 assetThreshold = assetThresholds[asset];
+        
+        if (availableFunds >= assetThreshold) {
+            // Start new trading period with threshold amount
+            _startNewTradingPeriod(asset, assetThreshold);
+        }
+    }
+    
+    /**
+     * @notice Start a new trading period for an asset
+     * @param asset Asset to start trading period for
+     * @param amount Amount to allocate to this trading period
+     */
+    function _startNewTradingPeriod(address asset, uint256 amount) internal {
+        // Increment period ID
+        assetCurrentPeriodId[asset]++;
+        uint256 newPeriodId = assetCurrentPeriodId[asset];
+        
+        // Create new trading period
+        DataTypes.TradingPeriod storage period = assetPeriods[asset][newPeriodId];
+        period.startTime = block.timestamp;
+        period.totalUsdValueAtStart = amount;
+        period.isActive = true;
+        period.profitsDistributed = false;
+        
+        // Track this period as active
+        assetActivePeriods[asset].push(newPeriodId);
+        periodAssetAllocation[asset][newPeriodId] = amount;
+        
+        // Reduce available funds
+        assetAvailableForTrading[asset] -= amount;
+        
+        emit Events.TradingPeriodStarted(asset, newPeriodId, block.timestamp, amount);
+        
+        // Send funds to controller for this period
+        _sendFundsToControllerForPeriod(asset, amount, newPeriodId);
+    }
+    
+
+    
+    /**
+     * @notice Send funds to controller for a specific trading period
+     * @param asset Asset to send
+     * @param amount Amount to send for this period
+     * @param periodId Period ID this amount belongs to
+     */
+    function _sendFundsToControllerForPeriod(address asset, uint256 amount, uint256 periodId) internal {
+        if (controller == address(0)) return;
+        
+        uint256 usdValue = _getAssetUsdValue(asset, amount);
+        
+        // Transfer to controller
+        IERC20(asset).safeTransfer(controller, amount);
+        
+        // Update balances (don't reset to 0, just reduce by amount)
+        assetBalances[asset] -= amount;
+        totalPoolValue -= usdValue;
+        
+        // Call controller's receiveFunds function
+        (bool success, ) = controller.call(
+            abi.encodeWithSignature(
+                "receiveFunds(address,uint256)", 
+                asset, 
+                amount
+            )
+        );
+        
+        if (!success) {
+            // If call fails, restore balance
+            assetBalances[asset] += amount;
+            totalPoolValue += usdValue;
+            revert Errors.TradingPool__ThresholdNotReached();
+        }
+        
+        emit Events.FundsSentToController(asset, usdValue, periodId);
+    }
+    
+    /**
+     * @notice Distribute profits for a specific asset period
+     * @param asset Asset that generated profit
+     * @param profitAmount Profit amount in USD
+     * @param periodId Period ID to distribute profits for
+     */
+    function distributePeriodProfit(address asset, uint256 profitAmount, uint256 periodId) 
+        external 
+        onlyAuthorized 
+        moreThanZero(profitAmount) 
+    {
+        DataTypes.TradingPeriod storage period = assetPeriods[asset][periodId];
+        
+        if (!period.isActive) revert Errors.TradingPool__NoActiveTradingPeriod();
+        
+        // Calculate profit per dollar contributed
+        if (period.totalUsdValueAtStart > 0) {
+            period.profitPerDollar = (profitAmount * 1e18) / period.totalUsdValueAtStart;
+            period.periodPnL = int256(profitAmount);
+        }
+        
+        // End the period
+        period.endTime = block.timestamp;
+        period.isActive = false;
+        period.profitsDistributed = true;
+        
+        // Remove from active periods list
+        _removeActivePeriod(asset, periodId);
+        
+        // Update totals
+        totalProfits += profitAmount;
+        totalPoolValue += profitAmount;
+        
+        emit Events.ProfitDistributed(asset, 0, profitAmount, periodId);
+        emit Events.TradingPeriodEnded(asset, periodId, block.timestamp, int256(profitAmount));
+    }
+    
+    /**
+     * @notice Remove a period from the active periods list
+     * @param asset Asset address
+     * @param periodId Period ID to remove
+     */
+    function _removeActivePeriod(address asset, uint256 periodId) internal {
+        uint256[] storage activePeriods = assetActivePeriods[asset];
+        for (uint256 i = 0; i < activePeriods.length; i++) {
+            if (activePeriods[i] == periodId) {
+                // Remove by swapping with last element and popping
+                activePeriods[i] = activePeriods[activePeriods.length - 1];
+                activePeriods.pop();
+                break;
+            }
+        }
+    }
+    
+    /**
+     * @notice Record loss for a specific asset period
+     * @param asset Asset that generated loss
+     * @param lossAmount Loss amount in USD
+     * @param periodId Period ID to record loss for
+     */
+    function recordPeriodLoss(address asset, uint256 lossAmount, uint256 periodId) 
+        external 
+        onlyAuthorized 
+        moreThanZero(lossAmount) 
+    {
+        DataTypes.TradingPeriod storage period = assetPeriods[asset][periodId];
+        
+        if (!period.isActive) revert Errors.TradingPool__NoActiveTradingPeriod();
+        
+        // Record the loss
+        period.periodPnL = -int256(lossAmount);
+        
+        // End the period
+        period.endTime = block.timestamp;
+        period.isActive = false;
+        period.profitsDistributed = true;
+        
+        // Remove from active periods list
+        _removeActivePeriod(asset, periodId);
+        
+        // Update totals
+        totalLosses += lossAmount;
+        if (totalPoolValue >= lossAmount) {
+            totalPoolValue -= lossAmount;
+        } else {
+            totalPoolValue = 0;
+        }
+        
+        emit Events.LossRecorded(asset, lossAmount, assetCurrentPeriodId[asset]);
+        emit Events.TradingPeriodEnded(asset, assetCurrentPeriodId[asset], block.timestamp, -int256(lossAmount));
+    }
+    
+    /**
+     * @notice Calculate user's profit/loss for a specific period
+     * @param user User address
+     * @param asset Asset address
+     * @param periodId Period ID
+     * @return profit User's profit (0 if loss)
+     * @return loss User's loss (0 if profit)
+     */
+    function calculateUserPnL(address user, address asset, uint256 periodId) 
+        external 
+        view 
+        returns (uint256 profit, uint256 loss) 
+    {
+        DataTypes.TradingPeriod storage period = assetPeriods[asset][periodId];
+        uint256 userContribution = period.userUsdContributionAtStart[user];
+        
+        if (userContribution == 0) return (0, 0);
+        
+        if (period.periodPnL > 0) {
+            // Profit scenario
+            profit = (userContribution * period.profitPerDollar) / 1e18;
+        } else if (period.periodPnL < 0) {
+            // Loss scenario
+            uint256 totalLoss = uint256(-period.periodPnL);
+            if (period.totalUsdValueAtStart > 0) {
+                loss = (userContribution * totalLoss) / period.totalUsdValueAtStart;
+            }
+        }
+    }
+    
+    /**
+     * @notice Claim profit from a completed period
+     * @param asset Asset address
+     * @param periodId Period ID
+     * @param reinvest Whether to reinvest as pool tokens or withdraw
+     */
+    function claimPeriodProfit(address asset, uint256 periodId, bool reinvest) 
+        external 
+        nonReentrant 
+    {
+        DataTypes.TradingPeriod storage period = assetPeriods[asset][periodId];
+        
+        if (!period.profitsDistributed) revert Errors.TradingPool__PeriodNotCompleted();
+        if (period.userProfitClaimed[msg.sender]) revert Errors.TradingPool__ProfitAlreadyClaimed();
+        if (period.userUsdContributionAtStart[msg.sender] == 0) revert Errors.TradingPool__NoContributionInPeriod();
+        
+        (uint256 profit, ) = this.calculateUserPnL(msg.sender, asset, periodId);
+        
+        if (profit == 0) return;
+        
+        period.userProfitClaimed[msg.sender] = true;
+        
+        if (reinvest) {
+            // Mint additional pool tokens
+            uint256 currentPrice = totalPoolValue > 0 ? 
+                (totalPoolValue * 1e18) / totalSupply() : 1e18;
+            uint256 newTokens = (profit * 1e18) / currentPrice;
+            
+            _mint(msg.sender, newTokens);
+            userPoolTokens[msg.sender] += newTokens;
+            
+            emit Events.ProfitReinvested(msg.sender, asset, profit, newTokens, periodId);
+        } else {
+            // Withdraw profit in the asset
+            uint256 assetAmount = _convertUsdToAsset(asset, profit);
+            
+            if (assetBalances[asset] >= assetAmount) {
+                assetBalances[asset] -= assetAmount;
+                totalPoolValue -= profit;
+                
+                IERC20(asset).safeTransfer(msg.sender, assetAmount);
+                
+                emit Events.ProfitWithdrawn(msg.sender, asset, assetAmount, profit, periodId);
+            }
+        }
+    }
+    
+    // ============ View Functions ============
+    
+
+    
+    /**
+     * @notice Get period information
+     * @param asset Asset address
+     * @param periodId Period ID
+     * @return startTime Period start time
+     * @return endTime Period end time
+     * @return totalContributions Total contributions
+     * @return isActive Whether period is active
+     * @return pnl Period P&L
+     */
+    function getPeriodInfo(address asset, uint256 periodId) 
+        external 
+        view 
+        returns (
+            uint256 startTime,
+            uint256 endTime,
+            uint256 totalContributions,
+            bool isActive,
+            int256 pnl
+        ) 
+    {
+        DataTypes.TradingPeriod storage period = assetPeriods[asset][periodId];
+        return (
+            period.startTime,
+            period.endTime,
+            period.totalUsdValueAtStart,
+            period.isActive,
+            period.periodPnL
+        );
+    }
+    
+    /**
+     * @notice Get asset configuration
+     * @param asset Asset address
+     * @return isSupported Whether asset is supported
+     * @return decimals Asset decimals
+     * @return assetThreshold Asset threshold
+     * @return assetPeriodId Current period ID
+     * @return totalBalance Current balance
+     * @return periodActive Whether period is active
+     */
+    function getAssetConfig(address asset) external view returns (
+        bool isSupported,
+        uint8 decimals,
+        uint256 assetThreshold,
+        uint256 assetPeriodId,
+        uint256 totalBalance,
+        bool periodActive
+    ) {
+        return (
+            supportedAssets[asset],
+            assetDecimals[asset],
+            assetThresholds[asset],
+            assetCurrentPeriodId[asset],
+            assetBalances[asset],
+            assetPeriodActive[asset]
+        );
+    }
+    
+    // ============ New View Functions for Continuous Periods ============
+    
+    /**
+     * @notice Get all active trading periods for an asset
+     * @param asset Asset address
+     * @return activePeriods Array of active period IDs
+     */
+    function getActivePeriods(address asset) external view returns (uint256[] memory activePeriods) {
+        return assetActivePeriods[asset];
+    }
+    
+    /**
+     * @notice Get available funds for new trading periods
+     * @param asset Asset address
+     * @return availableFunds Available funds in USD
+     */
+    function getAvailableFundsForTrading(address asset) external view returns (uint256 availableFunds) {
+        return assetAvailableForTrading[asset];
+    }
+    
+    /**
+     * @notice Check if an asset can start a new trading period
+     * @param asset Asset address
+     * @return canStart True if threshold can be reached
+     * @return availableFunds Current available funds
+     * @return assetThreshold Required threshold
+     */
+    function canStartNewPeriod(address asset) external view returns (
+        bool canStart, 
+        uint256 availableFunds, 
+        uint256 assetThreshold
+    ) {
+        availableFunds = assetAvailableForTrading[asset];
+        assetThreshold = assetThresholds[asset];
+        canStart = availableFunds >= assetThreshold;
+    }
+    
+    /**
+     * @notice Get period allocation for a specific period
+     * @param asset Asset address
+     * @param periodId Period ID
+     * @return allocation Amount allocated to this period
+     */
+    function getPeriodAllocation(address asset, uint256 periodId) external view returns (uint256 allocation) {
+        return periodAssetAllocation[asset][periodId];
+    }
 
 
 

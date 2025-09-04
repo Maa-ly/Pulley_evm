@@ -63,23 +63,10 @@ contract SimplePulleyTest is Test {
 
         
         // Deploy TradingPool
-        tradingPool = new PulTradingPool(
-            "Pulley Pool Token",
-            "PPT",
-            address(permissionManager),
-            address(0), // Controller set later
-            address(0)  // PulleyToken set later
-        );
+        tradingPool = new PulTradingPool();
         
         // Deploy Controller
-        controller = new PulleyController(
-            address(permissionManager),
-            address(tradingPool),
-            address(0), // No separate insurance pool
-            address(pulleyToken),
-            supportedAssets,
-            address(blocklockSender)
-        );
+        controller = new PulleyController();
         
         // Configure contracts
         _configureContracts();
@@ -109,9 +96,32 @@ contract SimplePulleyTest is Test {
         tradingPool.updatePulleyToken(address(pulleyToken));
         controller.setAITrader(aiTrader);
         
+        // Initialize contracts
+        tradingPool.initialize(
+            "Pulley Pool Token",
+            "PPT",
+            address(permissionManager),
+            address(controller),
+            address(pulleyToken)
+        );
+        
+        // Prepare supported assets for controller initialization
+        address[] memory supportedAssets = new address[](2);
+        supportedAssets[0] = address(usdc);
+        supportedAssets[1] = address(usdt);
+        
+        controller.initialize(
+            address(permissionManager),
+            address(tradingPool),
+            address(0), // No separate insurance pool
+            address(pulleyToken),
+            address(0), // AI Trader set later
+            supportedAssets
+        );
+        
         // Add assets to trading pool
-        tradingPool.addAsset(address(usdc), 6);
-        tradingPool.addAsset(address(usdt), 6);
+        tradingPool.addAsset(address(usdc), 6, 1000 * 1e6, address(0));
+        tradingPool.addAsset(address(usdt), 6, 1000 * 1e6, address(0));
         
         // Set threshold
         tradingPool.updateThreshold(THRESHOLD);

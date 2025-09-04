@@ -8,6 +8,9 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IPermissionManager} from "../Permission/interface/IPermissionManager.sol";
+import {DataTypes} from "../libraries/DataTypes.sol";
+import {Errors} from "../libraries/Errors.sol";
+import {Events} from "../libraries/Events.sol";
 
 /**
  * @title PulleyToken
@@ -45,23 +48,10 @@ contract PulleyToken is ERC20, ERC20Permit, ReentrancyGuard {
     address[] public backingAssets;
     
     // ============ Events ============
-    
-    event TokensMinted(address indexed to, uint256 tokensAmount, uint256 backingAmount, uint256 currentPrice);
-    event TokensBurned(address indexed from, uint256 tokensAmount, uint256 backingReturned, uint256 currentPrice);
-    event GrowthApplied(uint256 newTotalSupply, uint256 growthRate, uint256 timestamp);
-    event UtilizationUpdated(uint256 newUtilization, uint256 newGrowthRate);
-    event InsuranceLossCovered(uint256 lossAmount, uint256 reserveUsed);
-    event AssetSupportUpdated(address indexed asset, bool supported);
-    event PriceUpdated(uint256 newPrice, uint256 timestamp);
+    // Events are now imported from libraries
     
     // ============ Errors ============
-    
-    error PulleyToken__ZeroAmount();
-    error PulleyToken__ZeroAddress();
-    error PulleyToken__UnsupportedAsset();
-    error PulleyToken__InsufficientBacking();
-    error PulleyToken__InsufficientReserve();
-    error PulleyToken__NotAuthorized();
+    // Errors are now imported from libraries
     
     // ============ Modifiers ============
     
@@ -73,14 +63,14 @@ contract PulleyToken is ERC20, ERC20Permit, ReentrancyGuard {
                     "PulleyToken: not authorized"
                 );
             } else {
-                revert PulleyToken__NotAuthorized();
+                revert Errors.PulleyToken__NotAuthorized();
             }
         }
         _;
     }
     
     modifier moreThanZero(uint256 amount) {
-        if (amount == 0) revert PulleyToken__ZeroAmount();
+        if (amount == 0) revert Errors.PulleyToken__ZeroAmount();
         _;
     }
     
@@ -99,7 +89,7 @@ contract PulleyToken is ERC20, ERC20Permit, ReentrancyGuard {
         for (uint256 i = 0; i < _supportedAssets.length; i++) {
             supportedAssets[_supportedAssets[i]] = true;
             backingAssets.push(_supportedAssets[i]);
-            emit AssetSupportUpdated(_supportedAssets[i], true);
+            emit Events.AssetSupportUpdatedInToken(_supportedAssets[i], true);
         }
     }
     
@@ -117,7 +107,7 @@ contract PulleyToken is ERC20, ERC20Permit, ReentrancyGuard {
         nonReentrant 
         returns (uint256 tokensToMint) 
     {
-        if (!supportedAssets[asset]) revert PulleyToken__UnsupportedAsset();
+        if (!supportedAssets[asset]) revert Errors.PulleyToken__UnsupportedAsset();
         
         // Apply growth before minting
         _updateGrowth();
@@ -147,7 +137,7 @@ contract PulleyToken is ERC20, ERC20Permit, ReentrancyGuard {
             _mint(msg.sender, tokensToMint);
         }
         
-        emit TokensMinted(msg.sender, tokensToMint, backingAmount, currentPrice);
+        emit Events.Minted(msg.sender, tokensToMint, backingAmount);
     }
     
     /**
@@ -162,8 +152,8 @@ contract PulleyToken is ERC20, ERC20Permit, ReentrancyGuard {
         nonReentrant 
         returns (uint256 backingReturned) 
     {
-        if (!supportedAssets[asset]) revert PulleyToken__UnsupportedAsset();
-        if (balanceOf(msg.sender) < tokenAmount) revert PulleyToken__InsufficientBacking();
+        if (!supportedAssets[asset]) revert Errors.PulleyToken__UnsupportedAsset();
+        if (balanceOf(msg.sender) < tokenAmount) revert Errors.PulleyToken__InsufficientBackingValue();
         
         // Apply growth before burning
         _updateGrowth();
@@ -197,7 +187,7 @@ contract PulleyToken is ERC20, ERC20Permit, ReentrancyGuard {
             IERC20(asset).safeTransfer(msg.sender, backingReturned);
         }
         
-        emit TokensBurned(msg.sender, tokenAmount, backingReturned, currentPrice);
+        emit Events.Burned(msg.sender, tokenAmount, backingReturned);
     }
     
     // ============ Growth Mechanism ============
@@ -243,7 +233,7 @@ contract PulleyToken is ERC20, ERC20Permit, ReentrancyGuard {
             insuranceReserve += growthAmount;
             _mint(address(this), growthAmount);
             
-            emit GrowthApplied(newSupply, currentGrowthRate, block.timestamp);
+            emit Events.ProfitsAddedToToken(growthAmount, insuranceReserve);
         }
         
         lastGrowthUpdate = block.timestamp;
@@ -300,21 +290,21 @@ contract PulleyToken is ERC20, ERC20Permit, ReentrancyGuard {
         // Trigger growth update when utilization changes
         _updateGrowth();
         
-        emit UtilizationUpdated(newUtilizationRate, _calculateGrowthRate());
+        emit Events.ProfitsAddedToToken(0, insuranceReserve); // Utilization updated
     }
     
     /**
      * @notice Cover losses using insurance reserve
      */
     function coverLoss(uint256 lossAmount) external onlyAuthorized moreThanZero(lossAmount) {
-        if (insuranceReserve < lossAmount) revert PulleyToken__InsufficientReserve();
+        if (insuranceReserve < lossAmount) revert Errors.PulleyToken__InsufficientReserve();
         
         insuranceReserve -= lossAmount;
         
         // Burn tokens from insurance reserve
         _burn(msg.sender, lossAmount);
         
-        emit InsuranceLossCovered(lossAmount, lossAmount);
+        emit Events.LossCoveredByToken(lossAmount, insuranceReserve);
     }
     
     /**
@@ -358,7 +348,7 @@ contract PulleyToken is ERC20, ERC20Permit, ReentrancyGuard {
             }
         }
         
-        emit AssetSupportUpdated(asset, supported);
+        emit Events.AssetSupportUpdatedInToken(asset, supported);
     }
     
     /**

@@ -73,7 +73,7 @@ contract DeployScript is Script {
         permissionManager = new PermissionManager();
         console.log("PermissionManager:", address(permissionManager));
         
-        // Setup supported assets
+        // Setup supported assets for PulleyToken
         address[] memory supportedAssets = new address[](2);
         if (block.chainid == 31337) {
             supportedAssets[0] = address(usdc);
@@ -95,47 +95,60 @@ contract DeployScript is Script {
         
 
         
-        // Deploy TradingPool
-        tradingPool = new PulTradingPool(
-            "Pulley Pool Token",
-            "PPT",
-            address(permissionManager),
-            address(0), // Controller set later
-            address(0)  // PulleyToken set later
-        );
+        // Deploy TradingPool (empty constructor)
+        tradingPool = new PulTradingPool();
         console.log("TradingPool:", address(tradingPool));
         
-        // Deploy Controller
-        address blocklockAddress = block.chainid == 31337 
-            ? address(blocklockSender) 
-            : 0xF8e2477647Ee6e33CaD4C915DaDc030b74AB976b; // Real Blocklock address
-            
-        controller = new PulleyController(
-            address(permissionManager),
-            address(tradingPool),
-            address(0), // No separate insurance pool
-            address(pulleyToken),
-            supportedAssets,
-            blocklockAddress
-        );
+        // Deploy Controller (empty constructor)
+        controller = new PulleyController();
         console.log("Controller:", address(controller));
     }
     
     function _configureContracts() internal {
         console.log("Configuring contracts...");
         
+        // Setup supported assets for initialization
+        address[] memory supportedAssets = new address[](2);
+        if (block.chainid == 31337) {
+            supportedAssets[0] = address(usdc);
+            supportedAssets[1] = address(usdt);
+        } else {
+            // Use real addresses for mainnet/testnet
+            supportedAssets[0] = 0xA0b86A33E6411c0C6E3a3f8D9C5e0D3e8b5A5e7F; // USDC
+            supportedAssets[1] = 0xdAC17F958D2ee523a2206206994597C13D831ec7; // USDT
+        }
+        
+        // Initialize TradingPool
+        tradingPool.initialize(
+            "Pulley Pool Token",
+            "PPT",
+            address(permissionManager),
+            address(controller),
+            address(pulleyToken)
+        );
+        
+        // Initialize Controller
+        controller.initialize(
+            address(permissionManager),
+            address(tradingPool),
+            address(0), // No separate insurance pool
+            address(pulleyToken),
+            address(0), // AI Trader set later
+            supportedAssets
+        );
+        
         // Set contract relationships
         pulleyToken.setContracts(address(0), address(controller), address(tradingPool));
-        tradingPool.updateController(address(controller));
-        tradingPool.updatePulleyToken(address(pulleyToken));
         
-        // Add assets to trading pool
+        // Add assets to trading pool with proper parameters
+        // For testing, we'll use mock price feeds (address(0) for now)
         if (block.chainid == 31337) {
-            tradingPool.addAsset(address(usdc), 6); // USDC
-            tradingPool.addAsset(address(usdt), 6); // USDT
+            tradingPool.addAsset(address(usdc), 6, 1000 * 1e6, address(0)); // USDC with 1000 USDC threshold
+            tradingPool.addAsset(address(usdt), 6, 1000 * 1e6, address(0)); // USDT with 1000 USDT threshold
         } else {
-            tradingPool.addAsset(0xA0b86A33E6411c0C6E3a3f8D9C5e0D3e8b5A5e7F, 6); // USDC
-            tradingPool.addAsset(0xdAC17F958D2ee523a2206206994597C13D831ec7, 6); // USDT
+            // Use real price feed addresses for mainnet
+            tradingPool.addAsset(0xA0b86A33E6411c0C6E3a3f8D9C5e0D3e8b5A5e7F, 6, 1000 * 1e6, 0x8A753747A1Fa494EC906cE90E9f37563A8AF630e); // USDC
+            tradingPool.addAsset(0xdAC17F958D2ee523a2206206994597C13D831ec7, 6, 1000 * 1e6, 0x3E7d1eAB13ad0104d2750B8863b489D65364e32D); // USDT
         }
         
         // Set threshold
