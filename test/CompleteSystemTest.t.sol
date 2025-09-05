@@ -130,6 +130,7 @@ contract CompleteSystemTest is Test {
             "Test Pool",
             "TP",
             address(usdc),
+            6, // USDC has 6 decimals
             WETH_THRESHOLD,
             PULLEY_THRESHOLD,
             USDC_THRESHOLD
@@ -163,6 +164,7 @@ contract CompleteSystemTest is Test {
             "Pool 1",
             "P1",
             address(usdc),
+            6, // USDC has 6 decimals
             WETH_THRESHOLD,
             PULLEY_THRESHOLD,
             USDC_THRESHOLD
@@ -173,6 +175,7 @@ contract CompleteSystemTest is Test {
             "Pool 2",
             "P2",
             address(weth),
+            18, // WETH has 18 decimals
             WETH_THRESHOLD * 2,
             PULLEY_THRESHOLD * 2,
             USDC_THRESHOLD * 2
@@ -196,6 +199,7 @@ contract CompleteSystemTest is Test {
             "Test Pool",
             "TP",
             address(usdc),
+            6, // USDC has 6 decimals
             WETH_THRESHOLD,
             PULLEY_THRESHOLD,
             USDC_THRESHOLD
@@ -243,6 +247,7 @@ contract CompleteSystemTest is Test {
             "Test Pool",
             "TP",
             address(usdc),
+            6, // USDC has 6 decimals
             WETH_THRESHOLD,
             PULLEY_THRESHOLD,
             USDC_THRESHOLD
@@ -293,6 +298,7 @@ contract CompleteSystemTest is Test {
             "Test Pool",
             "TP",
             address(usdc),
+            6, // USDC has 6 decimals
             WETH_THRESHOLD,
             PULLEY_THRESHOLD,
             USDC_THRESHOLD
@@ -360,6 +366,7 @@ contract CompleteSystemTest is Test {
             "Complete Test Pool",
             "CTP",
             address(usdc),
+            6, // USDC has 6 decimals
             WETH_THRESHOLD,
             PULLEY_THRESHOLD,
             USDC_THRESHOLD
@@ -453,6 +460,7 @@ contract CompleteSystemTest is Test {
             "Invalid Pool",
             "IP",
             address(usdc),
+            6, // USDC has 6 decimals
             0, // Invalid threshold
             PULLEY_THRESHOLD,
             USDC_THRESHOLD
@@ -464,6 +472,7 @@ contract CompleteSystemTest is Test {
             "Invalid Pool",
             "IP",
             address(0), // Invalid custom asset
+            6, // USDC has 6 decimals
             WETH_THRESHOLD,
             PULLEY_THRESHOLD,
             USDC_THRESHOLD
@@ -480,6 +489,7 @@ contract CompleteSystemTest is Test {
             "Test Pool",
             "TP",
             address(usdc),
+            6, // USDC has 6 decimals
             WETH_THRESHOLD,
             PULLEY_THRESHOLD,
             USDC_THRESHOLD

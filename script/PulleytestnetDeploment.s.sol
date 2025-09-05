@@ -46,7 +46,7 @@ contract DeployScript is Script {
         _deployContracts();
         
         // Initialize contracts with proper configuration
-        _configureContracts();
+        _configureContracts(deployer);
         
         // Set up permissions
         _setupPermissions();
@@ -92,16 +92,17 @@ contract DeployScript is Script {
         );
         console.log("PulleyToken:", address(pulleyToken));
 
-        tradingPool = new PulTradingPool();
-        console.log("TradingPool:", address(tradingPool));
+        // Deploy implementations first (these will be used as templates)
+        PulTradingPool tradingPoolImplementation = new PulTradingPool();
+        console.log("TradingPool Implementation:", address(tradingPoolImplementation));
         
-        controller = new PulleyController();
-        console.log("Controller:", address(controller));
+        PulleyController controllerImplementation = new PulleyController();
+        console.log("Controller Implementation:", address(controllerImplementation));
         
-        // Deploy Clone Factory (needs implementations to be deployed first)
+        // Deploy Clone Factory with implementations
         cloneFactory = new ClonePuLTrade(
-            address(tradingPool),
-            address(controller),
+            address(tradingPoolImplementation),
+            address(controllerImplementation),
             address(wallet),
             address(pulleyToken),
             address(permissionManager),
@@ -110,66 +111,81 @@ contract DeployScript is Script {
         console.log("Clone Factory:", address(cloneFactory));
     }
 
-    function _configureContracts() internal {
+    function _configureContracts(address deployer) internal {
         console.log("Configuring contracts...");
 
-        // Initialize Wallet
+        // Grant permission to clone factory for addAsset (needed before clone creation)
+        permissionManager.grantPermission(address(cloneFactory), PulTradingPool.addAsset.selector);
+        console.log("Permissions granted to clone factory");
+        
+        // Create the main trading pool and controller using the clone factory
+        console.log("Creating main trading pool and controller via clone factory...");
+        
+        // Create clone with default parameters
+        (address poolAddress, address controllerAddress, address walletAddress) = cloneFactory.quickCreateClone(
+            "Pulley Main Pool", // name
+            "PULMP", // symbol
+            address(sToken), // Use sToken as the custom asset for the main pool
+            18, // sToken has 18 decimals
+            1000 * 1e18, // 1000 USD threshold
+            1000 * 1e18, // 1000 USD max deposit
+            1000 * 1e18  // 1000 USD min deposit
+        );
+        
+        tradingPool = PulTradingPool(payable(poolAddress));
+        controller = PulleyController(payable(controllerAddress));
+        
+        console.log("Main Trading Pool:", address(tradingPool));
+        console.log("Main Controller:", address(controller));
+
+        // Initialize Wallet with the cloned controller
         wallet.initialize(address(controller), address(controller)); // Controller is the AI signer
         console.log("Wallet initialized");
 
-        // Initialize Trading Pool
-        tradingPool.initialize(
-            "Pulley Trading Pool",
-            "PULTP",
-            address(permissionManager),
-            address(controller),
-            address(pulleyToken)
-        );
-        console.log("Trading Pool initialized");
-
-        // Initialize Controller
-        controller.initialize(
-            address(permissionManager),
-            address(tradingPool),
-            address(0), // No insurance pool for now
-            address(pulleyToken),
-            address(0), // No AI trader for now
-            supportedAssets
-        );
-        console.log("Controller initialized");
+        // Grant permission to deployer for setContracts
+        permissionManager.grantPermission(deployer, PulleyToken.setContracts.selector);
+        
+        // Grant permission to deployer for addAsset
+        permissionManager.grantPermission(deployer, PulTradingPool.addAsset.selector);
+        
+        // Grant permission to deployer for setAIWallet
+        permissionManager.grantPermission(deployer, PulleyController.setAIWallet.selector);
 
         // Set up contract references
         pulleyToken.setContracts(address(0), address(controller), address(tradingPool));
         console.log("PulleyToken contract references set");
 
-        // Add supported assets to trading pool
+        // Add supported assets to trading pool (decimals are determined by the asset contracts)
+        // Note: Users can add their own assets with any decimals via the trading pool interface
         tradingPool.addAsset(
             address(usdc),
-            6, // USDC has 6 decimals
+            6, // MockUSDC has 6 decimals (this is just for the main pool example)
             1000 * 1e18, // 1000 USD threshold
             address(0) // No price feed for mock tokens
         );
-        console.log("USDC added to trading pool");
+        console.log("USDC added to trading pool (6 decimals)");
 
         tradingPool.addAsset(
             address(usdt),
-            6, // USDT has 6 decimals
+            6, // MockUSDT has 6 decimals (this is just for the main pool example)
             1000 * 1e18, // 1000 USD threshold
             address(0) // No price feed for mock tokens
         );
-        console.log("USDT added to trading pool");
+        console.log("USDT added to trading pool (6 decimals)");
 
         tradingPool.addAsset(
             address(sToken),
-            18, // sToken has 18 decimals
+            18, // MockSToken has 18 decimals (this is just for the main pool example)
             1000 * 1e18, // 1000 USD threshold
             address(0) // No price feed for mock tokens
         );
-        console.log("sToken added to trading pool");
+        console.log("sToken added to trading pool (18 decimals)");
 
         // Set AI wallet in controller
         controller.setAIWallet(payable(address(wallet)));
         console.log("AI wallet set in controller");
+        
+        console.log("Main trading pool and controller created and configured successfully!");
     }
 
     function _setupPermissions() internal {
@@ -248,9 +264,12 @@ contract DeployScript is Script {
         console.log("PermissionManager:", address(permissionManager));
         console.log("Wallet:", address(wallet));
         console.log("PulleyToken:", address(pulleyToken));
+        console.log("Clone Factory:", address(cloneFactory));
+        console.log("");
+        
+        console.log("=== MAIN TRADING POOL (CREATED VIA CLONE) ===");
         console.log("TradingPool:", address(tradingPool));
         console.log("Controller:", address(controller));
-        console.log("Clone Factory:", address(cloneFactory));
         console.log("");
         
         console.log("=== MOCK TOKENS ===");
@@ -261,9 +280,14 @@ contract DeployScript is Script {
         
         console.log("=== CONFIGURATION ===");
         console.log("Supported Assets Count:", supportedAssets.length);
-        console.log("USDC Threshold: 1000 USD");
-        console.log("USDT Threshold: 1000 USD");
-        console.log("sToken Threshold: 1000 USD");
+        console.log("Example Assets (for main pool):");
+        console.log("  - USDC: 6 decimals, 1000 USD threshold");
+        console.log("  - USDT: 6 decimals, 1000 USD threshold");
+        console.log("  - sToken: 18 decimals, 1000 USD threshold (used as custom asset)");
+        console.log("");
+        console.log("Note: Users can add custom assets with ANY decimals via tradingPool.addAsset()");
+        console.log("Only native token and PulleyToken have fixed decimals");
+        console.log("");
         console.log("AI Signer: Controller (", address(controller), ")");
         console.log("Deployer (Admin):", vm.addr(vm.envUint("PRIVATE_KEY")));
         console.log("Deployer has full system permissions");
@@ -280,11 +304,14 @@ contract DeployScript is Script {
         
         console.log("=== TESTING ===");
         console.log("1. Mint some USDC/USDT tokens");
-        console.log("2. Approve trading pool to spend tokens");
+        console.log("2. Approve main trading pool to spend tokens");
         console.log("3. Call tradingPool.deposit() to deposit assets");
         console.log("4. Check pool metrics with tradingPool.getPoolMetrics()");
-        console.log("5. Create clone pools using cloneFactory.quickCreateClone()");
-        console.log("6. Check clone count with cloneFactory.getCloneCount()");
+        console.log("5. Add custom assets with any decimals: tradingPool.addAsset(asset, decimals, threshold, priceFeed)");
+        console.log("6. Create additional trading strategies using cloneFactory.quickCreateClone(name, symbol, asset, decimals, nativeThreshold, pulleyThreshold, customThreshold)");
+        console.log("7. Check clone count with cloneFactory.getCloneCount()");
+        console.log("8. Each clone creates a new trading pool + controller pair");
+        console.log("9. Users can create their own trading strategies with custom parameters and asset configurations");
         console.log("");
         
         console.log("Deployment completed successfully!");

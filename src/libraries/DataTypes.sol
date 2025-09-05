@@ -75,6 +75,7 @@ library DataTypes {
         uint256 nativeThreshold;
         uint256 pulleyThreshold;
         uint256 customThreshold;
+        uint8 customAssetDecimals; // Decimals for custom asset
         string poolName;
         string poolSymbol;
     }

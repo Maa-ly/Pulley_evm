@@ -161,6 +161,7 @@ contract ClonePuLTrade is Ownable {
      * @param poolName Pool name
      * @param poolSymbol Pool symbol
      * @param customAsset Custom third asset
+     * @param customAssetDecimals Decimals for custom asset
      * @param nativeThreshold Threshold for native asset
      * @param pulleyThreshold Threshold for PulleyToken
      * @param customThreshold Threshold for custom asset
@@ -172,6 +173,7 @@ contract ClonePuLTrade is Ownable {
         string memory poolName,
         string memory poolSymbol,
         address customAsset,
+        uint8 customAssetDecimals,
         uint256 nativeThreshold,
         uint256 pulleyThreshold,
         uint256 customThreshold
@@ -183,6 +185,7 @@ contract ClonePuLTrade is Ownable {
             nativeThreshold: nativeThreshold,
             pulleyThreshold: pulleyThreshold,
             customThreshold: customThreshold,
+            customAssetDecimals: customAssetDecimals,
             poolName: poolName,
             poolSymbol: poolSymbol
         });
@@ -198,13 +201,15 @@ contract ClonePuLTrade is Ownable {
     function _configureCloneAssets(address clone, DataTypes.PoolCloneConfig memory config) internal {
         PulTradingPool pool = PulTradingPool(clone);
         
-        // Add native asset (e.g., WETH on Ethereum)
-        pool.addAsset(
-            config.nativeAsset,
-            18, // Most native tokens are 18 decimals
-            config.nativeThreshold,
-            address(0) // Price feed to be set later
-        );
+        // Add native asset (e.g., WETH on Ethereum) - only if not zero address
+        if (config.nativeAsset != address(0)) {
+            pool.addAsset(
+                config.nativeAsset,
+                18, // Most native tokens are 18 decimals
+                config.nativeThreshold,
+                address(0) // Price feed to be set later
+            );
+        }
         
         // Add PulleyToken
         pool.addAsset(
@@ -214,13 +219,15 @@ contract ClonePuLTrade is Ownable {
             address(0) // Price feed to be set later
         );
         
-        // Add custom asset
-        pool.addAsset(
-            config.customAsset,
-            18, // Assume 18 decimals, can be updated
-            config.customThreshold,
-            address(0) // Price feed to be set later
-        );
+        // Add custom asset - only if not zero address
+        if (config.customAsset != address(0)) {
+            pool.addAsset(
+                config.customAsset,
+                config.customAssetDecimals, // Use specified decimals
+                config.customThreshold,
+                address(0) // Price feed to be set later
+            );
+        }
         
         emit Events.CloneInitialized(clone, config.nativeAsset, config.pulleyToken, config.customAsset);
     }
