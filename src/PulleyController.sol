@@ -10,6 +10,7 @@ import {AbstractBlocklockReceiver} from "blocklock-solidity/AbstractBlocklockRec
 import {TypesLib} from "blocklock-solidity/libraries/TypesLib.sol";
 import {BLS} from "blocklock-solidity/libraries/BLS.sol";
 import "./Token/PulleyToken.sol";
+import "./wallet.sol";
 
 /**
  * @title PulleyController
@@ -27,7 +28,7 @@ contract PulleyController is ReentrancyGuard, AbstractBlocklockReceiver {
     address public insurancePool;
     address public pulleyStablecoin;
     address public aiTrader; // External AI trading system
-    address public aiWallet; // AI trading wallet contract
+    address payable public aiWallet; // AI trading wallet contract
     
     // Fund allocation percentages
     uint256 public constant INSURANCE_PERCENTAGE = 15; // 15%
@@ -155,7 +156,6 @@ contract PulleyController is ReentrancyGuard, AbstractBlocklockReceiver {
      */
     function receiveFunds(address asset, uint256 amount) 
         external 
-        onlyAuthorized 
         moreThanZero(amount) 
         nonReentrant 
     {
@@ -198,15 +198,15 @@ contract PulleyController is ReentrancyGuard, AbstractBlocklockReceiver {
         emit Events.FundsAllocated(asset, allocation.insuranceAmount, allocation.tradingAmount);
     }
     
+   
+    
     /**
-     * @notice Report trading results from AI system
+     * @notice Internal function to report trading results
      * @param requestId Trading request ID
      * @param pnl Profit and loss result (positive for profit, negative for loss)
      */
-    function reportTradingResult(bytes32 requestId, int256 pnl) 
-        external 
-        onlyAuthorized 
-        nonReentrant 
+    function _reportTradingResult(bytes32 requestId, int256 pnl) 
+        internal 
     {
         TradeRequest storage request = activeTradeRequests[requestId];
         if (!request.isActive) revert Errors.PulleyController__TradeNotFound();
@@ -215,7 +215,7 @@ contract PulleyController is ReentrancyGuard, AbstractBlocklockReceiver {
         request.resultPnL = pnl;
         request.isCompleted = true;
         request.isActive = false;
-        //@dev add a seperate function that calculate the pnl from the ai wallet using the balance and the request info
+        
         // Update asset P&L tracking
         if (pnl >= 0) {
             assetProfitLoss[request.asset] += uint256(pnl);
@@ -229,7 +229,6 @@ contract PulleyController is ReentrancyGuard, AbstractBlocklockReceiver {
             totalProfits += profit;
             _distributeProfits(request.asset, profit);
             emit Events.TradeCompleted(requestId, request.asset, pnl, true);
-            //@dev calls wallet sendFunds
         } else if (pnl < 0) {
             // Loss case
             uint256 loss = uint256(-pnl);
@@ -237,6 +236,63 @@ contract PulleyController is ReentrancyGuard, AbstractBlocklockReceiver {
             _handleTradingLoss(request.asset, loss);
             emit Events.TradeCompleted(requestId, request.asset, pnl, false);
         }
+    }
+    
+    /**
+     * @notice Check AI wallet PnL and handle funds (public function)
+     * @param asset Asset to check
+     * @return pnl Current profit/loss
+     * @return fundsSent Whether funds were sent from wallet
+     */
+    function checkAIWalletPnL(address asset) 
+        external 
+      
+        nonReentrant 
+        returns (int256 pnl, bool fundsSent) 
+    {
+        if (aiWallet == address(0)) revert Errors.PulleyController__ZeroAddress();
+        
+        // Get session info from wallet to check PnL
+        (uint256 sessionId, uint256 initialBalance, uint256 currentBalance, int256 walletPnL) = 
+            Wallet(aiWallet).getSessionInfo(asset);
+        
+        pnl = walletPnL;
+        fundsSent = false;
+        
+        // If there's profit, call sendFunds to retrieve it
+        if (pnl > 0 && currentBalance > 0) {
+            // Generate signature for sendFunds (controller is the AI signer)
+            bytes32 messageHash = keccak256(abi.encodePacked(
+                aiWallet,
+                asset,
+                currentBalance,
+                Wallet(aiWallet).nonces(asset),
+                block.chainid
+            ));
+            
+            bytes32 ethSignedMessageHash = keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", messageHash));
+            bytes memory signature = abi.encodePacked(ethSignedMessageHash);
+            
+            // Call wallet's sendFunds function
+            Wallet(aiWallet).sendFunds(asset, currentBalance, signature);
+            fundsSent = true;
+        }
+        
+        // If there's PnL (profit or loss), report it to the system
+        if (pnl != 0) {
+            // Generate request ID for this check
+            bytes32 requestId = keccak256(abi.encodePacked(
+                aiWallet,
+                asset,
+                sessionId,
+                block.timestamp
+            ));
+            
+            // Report the PnL result
+            _reportTradingResult(requestId, pnl);
+        }
+        
+        emit Events.AIWalletPnLChecked(asset, pnl, fundsSent);
     }
     
     // ============ Automated Functions (Blocklock Integration) ============
@@ -312,17 +368,10 @@ contract PulleyController is ReentrancyGuard, AbstractBlocklockReceiver {
 
         // Send funds to AI wallet if wallet is set
         if (aiWallet != address(0)) {
-            // Approve AI wallet to spend the asset
-            IERC20(asset).approve(aiWallet, amount);
+            // Call AI wallet's receiveFunds function
+            Wallet(aiWallet).receiveFunds(address(this), asset, amount);
             
-            // Call AI wallet to receive funds
-            (bool success, ) = aiWallet.call(
-                abi.encodeWithSignature("receiveFunds(address,address,uint256)", address(this), asset, amount)
-            );
-            
-            if (success) {
-                emit Events.TradeRequestSent(requestId, asset, amount, 0);
-            }
+            emit Events.TradeRequestSent(requestId, asset, amount, 0);
         } else {
             emit Events.TradeRequestSent(requestId, asset, amount, 0);
         }
@@ -372,17 +421,39 @@ contract PulleyController is ReentrancyGuard, AbstractBlocklockReceiver {
         
         // Check if insurance can cover the loss
         if (insuranceAllocations[asset] >= lossAmount) {
+            // Full coverage: distribute insurance back to participants
             insuranceAllocations[asset] -= lossAmount;
             totalInsuranceFunds -= lossAmount;
             coveredByInsurance = true;
+            
+            // Burn corresponding PulleyToken insurance reserve
+            PulleyToken(pulleyStablecoin).coverLoss(lossAmount);
+            
+            // Distribute insurance back to trading pool participants for this period
+            (bool success, ) = tradingPool.call(
+                abi.encodeWithSignature("distributeInsuranceRefund(address,uint256)", asset, lossAmount)
+            );
+            require(success, "PulleyController: Failed to distribute insurance refund");
+            
         } else {
             // Partial or no coverage - report loss to trading pool
             uint256 uncoveredLoss = lossAmount;
+            uint256 insuranceUsed = 0;
             
             if (insuranceAllocations[asset] > 0) {
+                insuranceUsed = insuranceAllocations[asset];
                 uncoveredLoss -= insuranceAllocations[asset];
                 totalInsuranceFunds -= insuranceAllocations[asset];
                 insuranceAllocations[asset] = 0;
+                
+                // Burn corresponding PulleyToken insurance reserve for used portion
+                PulleyToken(pulleyStablecoin).coverLoss(insuranceUsed);
+                
+                // Distribute insurance back to participants for the covered portion
+                (bool success, ) = tradingPool.call(
+                    abi.encodeWithSignature("distributeInsuranceRefund(address,uint256)", asset, insuranceUsed)
+                );
+                require(success, "PulleyController: Failed to distribute insurance refund");
             }
             
             // Report uncovered loss to trading pool
@@ -465,7 +536,7 @@ contract PulleyController is ReentrancyGuard, AbstractBlocklockReceiver {
      * @notice Set AI wallet address (only authorized)
      * @param _aiWallet New AI wallet address
      */
-    function setAIWallet(address _aiWallet) external onlyAuthorized validAddress(_aiWallet) {
+    function setAIWallet(address payable _aiWallet) external onlyAuthorized validAddress(_aiWallet) {
         aiWallet = _aiWallet;
         emit Events.AIWalletUpdated(aiWallet, _aiWallet);
     }

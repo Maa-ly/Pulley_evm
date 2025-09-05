@@ -11,6 +11,7 @@ import {IPermissionManager} from "../Permission/interface/IPermissionManager.sol
 import {DataTypes} from "../libraries/DataTypes.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {Events} from "../libraries/Events.sol";
+import {PriceConvertor} from "../lib/PriceConvertor.sol";
 
 /**
  * @title PulleyToken
@@ -18,7 +19,7 @@ import {Events} from "../libraries/Events.sol";
  * @notice Floating stablecoin that grows with utilization - anyone can mint
  * @dev This token grows in value based on system utilization, not 1:1 backing
  */
-contract PulleyToken is ERC20, ERC20Permit, ReentrancyGuard {
+contract PulleyToken is ERC20, ERC20Permit, ReentrancyGuard, PriceConvertor {
     using SafeERC20 for IERC20;
 
     // ============ State Variables ============
@@ -116,7 +117,7 @@ contract PulleyToken is ERC20, ERC20Permit, ReentrancyGuard {
         uint256 currentPrice = getCurrentPrice();
         
         // Calculate tokens to mint based on current price
-        uint256 usdValue = backingAmount; // Simplified: assume 1:1 USD (use oracles in production)
+        uint256 usdValue = _getAssetUsdValue(asset, backingAmount);
         tokensToMint = (usdValue * 1e18) / currentPrice; // Price in 18 decimals
         
         // Transfer backing asset

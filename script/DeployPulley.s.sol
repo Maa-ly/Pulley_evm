@@ -10,7 +10,9 @@ import {PulleyToken} from "../src/Token/PulleyToken.sol";
 
 import {PulTradingPool} from "../src/Pool/PuLTradingPool.sol";
 import {PulleyController} from "../src/PulleyController.sol";
-import {MockERC20} from "../test/mocks/MockERC20.sol";
+import {MockUSDC} from "../src/mocks/MockUSDC.sol";
+import {MockUSDT} from "../src/mocks/MockUSDT.sol";
+import {MockSToken} from "../src/mocks/MockSToken.sol";
 import {MockBlocklockSender} from "../test/mocks/MockBlocklockSender.sol";
 
 /**
@@ -28,9 +30,9 @@ contract DeployPulley is Script {
     MockBlocklockSender public blocklockSender;
     
     // Mock tokens for testing
-    MockERC20 public usdc;
-    MockERC20 public usdt;
-    MockERC20 public weth;
+    MockUSDC public usdc;
+    MockUSDT public usdt;
+    MockSToken public sToken;
     
     // Configuration
     uint256 public constant THRESHOLD = 10000 * 1e18; // $10,000 USD
@@ -100,18 +102,18 @@ contract DeployPulley is Script {
         console.log("2. Deploying mock assets...");
         
         // Deploy mock tokens
-        usdc = new MockERC20("USD Coin", "USDC", 6);
-        usdt = new MockERC20("Tether USD", "USDT", 6);
-        weth = new MockERC20("Wrapped Ether", "WETH", 18);
+        usdc = new MockUSDC();
+        usdt = new MockUSDT();
+        sToken = new MockSToken();
         
         console.log("USDC:", address(usdc));
         console.log("USDT:", address(usdt));
-        console.log("WETH:", address(weth));
+        console.log("sToken:", address(sToken));
         
         // Mint initial supply to deployer for testing
         usdc.mint(msg.sender, 1000000 * 1e6); // 1M USDC
         usdt.mint(msg.sender, 1000000 * 1e6); // 1M USDT
-        weth.mint(msg.sender, 1000 * 1e18);   // 1000 WETH
+        sToken.mint(msg.sender, 1000 * 1e18); // 1000 sToken
     }
     
     function _deployProtocolContracts() internal {
@@ -122,7 +124,7 @@ contract DeployPulley is Script {
         if (block.chainid == 31337 || block.chainid == 11155111) {
             supportedAssets[0] = address(usdc);
             supportedAssets[1] = address(usdt);
-            supportedAssets[2] = address(weth);
+            supportedAssets[2] = address(sToken);
         } else {
             // Mainnet addresses - replace with actual
             supportedAssets[0] = 0xa0b86A33e6411c4d7C0A0F6a1b5b1c0D1E2F3456; // USDC
@@ -204,7 +206,7 @@ contract DeployPulley is Script {
         permissionManager.grantPermission(address(controller), PulTradingPool.recordPeriodLoss.selector);
         
         permissionManager.grantPermission(address(tradingPool), PulleyController.receiveFunds.selector);
-        permissionManager.grantPermission(AI_TRADER, PulleyController.reportTradingResult.selector);
+        permissionManager.grantPermission(AI_TRADER, PulleyController.checkAIWalletPnL.selector);
         
         // Grant Blocklock permissions for automation
         if (address(blocklockSender) != address(0)) {
@@ -222,7 +224,7 @@ contract DeployPulley is Script {
             // Add mock assets
             tradingPool.addAsset(address(usdc), 6, 1000e6, address(0));
             tradingPool.addAsset(address(usdt), 6, 1000e6, address(0));
-            tradingPool.addAsset(address(weth), 18, 1e18, address(0));
+            tradingPool.addAsset(address(sToken), 18, 1e18, address(0));
             
             // For testing, we can skip price feeds or use mock ones
             console.log("Mock assets configured");
@@ -298,7 +300,7 @@ contract DeployPulley is Script {
             address(controller),
             address(usdc),
             address(usdt),
-            address(weth)
+            address(sToken)
         );
     }
 }

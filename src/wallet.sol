@@ -6,12 +6,12 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {PriceConvertor} from "./lib/PriceConvertor.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {AggregatorV3Interface} from "./interfaces/AggregatorV3Interface.sol";
 import {DataTypes} from "./libraries/DataTypes.sol";
 import {Errors} from "./libraries/Errors.sol";
 import {Events} from "./libraries/Events.sol";
+import {PriceConvertor} from "./lib/PriceConvertor.sol";
 
 /**
  * @title AI Trading Wallet
@@ -138,6 +138,8 @@ contract Wallet is PriceConvertor, ReentrancyGuard {
         // Send funds to controller
         IERC20(asset).safeTransfer(controller, amount);
         
+  
+        
         emit Events.ProfitSentByWallet(controller, asset, amount, pnl);
         emit Events.SessionCompleted(asset, currentSession[asset], pnl, 0);
         
@@ -157,6 +159,38 @@ contract Wallet is PriceConvertor, ReentrancyGuard {
         if (initialBalance == 0) return 0;
         
         pnl = int256(currentBalance) - int256(initialBalance);
+    }
+    
+    /**
+     * @notice Report PnL to controller
+     * @param asset Asset that was traded
+     * @param pnl Profit/loss amount
+     */
+    function _reportPnLToController(address asset, int256 pnl) internal {
+        if (controller == address(0)) return;
+        
+        // Generate a unique request ID for this trading session
+        bytes32 requestId = keccak256(abi.encodePacked(
+            address(this),
+            asset,
+            currentSession[asset],
+            block.timestamp
+        ));
+        
+        // Call controller's reportTradingResult function
+        (bool success, ) = controller.call(
+            abi.encodeWithSignature(
+                "reportTradingResult(bytes32,int256)", 
+                requestId, 
+                pnl
+            )
+        );
+        
+        if (success) {
+            emit Events.PnLCalculated(asset, pnl, false);
+        } else {
+            emit Events.PnLCalculated(asset, pnl, false);
+        }
     }
     
     /**

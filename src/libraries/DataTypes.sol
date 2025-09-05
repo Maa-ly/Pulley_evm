@@ -24,6 +24,8 @@ library DataTypes {
         bool profitsDistributed;
         int256 periodPnL; // Period profit/loss
         uint256 profitPerDollar; // Profit per dollar contributed
+        uint256 insuranceRefundPerDollar; // Insurance refund per dollar contributed
+        uint256 insuranceRefundAmount; // Total insurance refund amount
     }
     
     /**

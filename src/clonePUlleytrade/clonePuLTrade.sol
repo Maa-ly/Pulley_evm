@@ -138,7 +138,7 @@ contract ClonePuLTrade is Ownable {
         );
         
         // Initialize wallet
-        Wallet(wallet).initialize(controller, msg.sender); // msg.sender as AI signer
+        Wallet(wallet).initialize(controller, controller); // Controller is the AI signer
         
         // Configure the three assets in the clone
         _configureCloneAssets(clone, config);

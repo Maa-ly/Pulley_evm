@@ -27,6 +27,7 @@ library Events {
     event TradingPeriodEnded(address indexed asset, uint256 indexed periodId, uint256 endTime, int256 pnl);
     event UserJoinedPeriod(address indexed user, address indexed asset, uint256 indexed periodId, uint256 contribution);
     event CannotJoinActivePeriod(address indexed user, address indexed asset, uint256 activePeriodId);
+    event InsuranceRefundDistributed(address indexed asset, uint256 refundAmount, uint256 periodId);
     
     // ============ Controller Events ============
     event FundsReceived(address indexed from, address indexed asset, uint256 amount);
@@ -40,6 +41,7 @@ library Events {
     event AIWalletUpdated(address indexed oldWallet, address indexed newWallet);
     event AutomationTriggered(string action, uint256 timestamp);
     event PeriodProfitReported(address indexed asset, uint256 indexed periodId, int256 pnl, uint256 usdValue);
+    event AIWalletPnLChecked(address indexed asset, int256 pnl, bool fundsSent);
     
     // ============ Wallet Events ============
     event FundsReceivedByWallet(address indexed from, address indexed asset, uint256 amount, uint256 sessionId);
@@ -48,6 +50,7 @@ library Events {
     event SessionCompleted(address indexed asset, uint256 indexed sessionId, int256 pnl, uint256 periodId);
     event AISignerUpdated(address indexed oldSigner, address indexed newSigner);
     event AssetAddedToWallet(address indexed asset, address priceFeed, uint8 decimals);
+    event PnLCalculated(address indexed asset, int256 pnl, bool fundsSent);
     
     // ============ PulleyToken Events ============
     event Minted(address indexed to, uint256 amount, uint256 backingValue);

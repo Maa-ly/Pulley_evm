@@ -12,7 +12,7 @@ import {IPulleyController} from "../interfaces/IPulleyController.sol";
 import {DataTypes} from "../libraries/DataTypes.sol";
 import {Errors} from "../libraries/Errors.sol";
 import {Events} from "../libraries/Events.sol";
-import "../lib/PriceConvertor.sol";
+import {PriceConvertor} from "../lib/PriceConvertor.sol";
 
 
 
@@ -22,7 +22,7 @@ import "../lib/PriceConvertor.sol";
  * @notice AI-based trading pool with threshold mechanism and oracle-based pricing
  * @dev People deposit, get pool tokens, when threshold reached funds go to controller
  */
-contract PulTradingPool is ERC20, ReentrancyGuard {
+contract PulTradingPool is ERC20, ReentrancyGuard, PriceConvertor {
 
   using SafeERC20 for IERC20;
     
@@ -32,9 +32,6 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
     address public controller;
     address public pulleyToken; // Pulley token for insurance
     
-    // Chainlink price feeds
-    mapping(address => AggregatorV3Interface) public priceFeeds; // asset => price feed
-    
     // Threshold mechanism
     uint256 public threshold = 10000 * 1e18; // 10,000 USD threshold
     uint256 public totalDeposited; // Total USD value deposited
@@ -42,7 +39,6 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
     // Asset management with oracle pricing
     mapping(address => uint256) public assetBalances; // Asset balances
     mapping(address => bool) public supportedAssets; // Supported assets
-    mapping(address => uint8) public assetDecimals; // Store decimals for each asset
     mapping(address => uint256) public assetThresholds; // Threshold per asset
     address[] public assetList;
     
@@ -69,6 +65,7 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
     // Insurance tracking
     uint256 public insuranceFunds; // 15% insurance allocation
     uint256 public totalLossesCovered; // Losses covered by insurance
+    uint256 public totalInsuranceRefunds; // Total insurance refunds distributed
     
     // ============ Events & Errors ============
     // Events and errors are now imported from libraries
@@ -370,37 +367,6 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
 
 
     //=================== Internal Functions ===================
-     /**
-     * @notice Get USD value of asset amount using Chainlink price feeds
-     * @param asset Asset address
-     * @param amount Asset amount
-     * @return usdValue USD value in 18 decimals
-     */
-    function _getAssetUsdValue(address asset, uint256 amount) internal view returns (uint256 usdValue) {
-        AggregatorV3Interface priceFeed = priceFeeds[asset];
-        
-        if (address(priceFeed) == address(0)) {
-            // Fallback: assume 1:1 USD for stablecoins
-            uint8 decimals = assetDecimals[asset];
-            if (decimals == 6) {
-                return amount * 1e12; // Convert USDC/USDT to 18 decimals
-            } else if (decimals == 18) {
-                return amount; // Already 18 decimals
-            } else {
-                return amount * (10 ** (18 - decimals));
-            }
-        } else {
-            // Use Chainlink price feed
-            (, int256 price, , , ) = priceFeed.latestRoundData();
-            require(price > 0, "TradingPool: Invalid price");
-            
-            uint8 assetDecimal = assetDecimals[asset];
-            uint8 feedDecimals = priceFeed.decimals();
-            
-            // Convert to 18 decimals: amount * price * 10^(18 - assetDecimals - feedDecimals)
-            usdValue = (amount * uint256(price) * (10 ** (18 - assetDecimal))) / (10 ** feedDecimals);
-        }
-    }
     
 
 
@@ -439,6 +405,7 @@ contract PulTradingPool is ERC20, ReentrancyGuard {
         if (supportedAssets[asset]) {
             supportedAssets[asset] = false;
             assetDecimals[asset] = 0;
+            priceFeeds[asset] = AggregatorV3Interface(address(0));
             
             // Remove from array
             for (uint256 i = 0; i < assetList.length; i++) {
@@ -559,37 +526,6 @@ function getInsuranceFunds() public view returns (uint256) {
         return controllerInsuranceFunds;
     }
     
-    /**
-     * @notice Convert USD amount to asset amount using price feeds
-     * @param asset Asset address
-     * @param usdAmount USD amount to convert
-     * @return Asset amount
-     */
-    function _convertUsdToAsset(address asset, uint256 usdAmount) internal view returns (uint256) {
-        AggregatorV3Interface priceFeed = priceFeeds[asset];
-        
-        if (address(priceFeed) == address(0)) {
-            // Fallback: assume 1:1 USD for stablecoins
-            uint8 decimals = assetDecimals[asset];
-            if (decimals == 6) {
-                return usdAmount / 1e12; // Convert from 18 decimals to 6
-            } else if (decimals == 18) {
-                return usdAmount; // Already 18 decimals
-            } else {
-                return usdAmount / (10 ** (18 - decimals));
-            }
-        } else {
-            // Use Chainlink price feed
-            (, int256 price, , , ) = priceFeed.latestRoundData();
-            require(price > 0, "TradingPool: Invalid price");
-            
-            uint8 assetDecimal = assetDecimals[asset];
-            uint8 feedDecimals = priceFeed.decimals();
-            
-            // Convert from USD to asset: usdAmount / price * 10^(assetDecimals + feedDecimals - 18)
-            return (usdAmount * (10 ** feedDecimals) * (10 ** assetDecimal)) / (uint256(price) * 1e18);
-        }
-    }
     
 
     
@@ -743,6 +679,47 @@ function getInsuranceFunds() public view returns (uint256) {
         
         emit Events.ProfitDistributed(asset, 0, profitAmount, periodId);
         emit Events.TradingPeriodEnded(asset, periodId, block.timestamp, int256(profitAmount));
+    }
+    
+    /**
+     * @notice Distribute insurance refund to participants when losses occur
+     * @param asset Asset that incurred loss
+     * @param refundAmount Amount of insurance to refund
+     */
+    function distributeInsuranceRefund(address asset, uint256 refundAmount) 
+        external 
+        onlyAuthorized 
+        moreThanZero(refundAmount) 
+    {
+        // Get the most recent active period for this asset
+        uint256[] memory activePeriods = assetActivePeriods[asset];
+        if (activePeriods.length == 0) {
+            revert Errors.TradingPool__NoActiveTradingPeriod();
+        }
+        
+        // Get the latest period (most recent)
+        uint256 latestPeriodId = activePeriods[activePeriods.length - 1];
+        DataTypes.TradingPeriod storage period = assetPeriods[asset][latestPeriodId];
+        
+        if (!period.isActive) {
+            revert Errors.TradingPool__NoActiveTradingPeriod();
+        }
+        
+        // Calculate refund per dollar contributed (15% of their contribution)
+        uint256 refundPerDollar = 0;
+        if (period.totalUsdValueAtStart > 0) {
+            // Calculate 15% of their contribution as refund
+            refundPerDollar = (refundAmount * 1e18) / period.totalUsdValueAtStart;
+        }
+        
+        // Update period with refund information
+        period.insuranceRefundPerDollar = refundPerDollar;
+        period.insuranceRefundAmount = refundAmount;
+        
+        // Update pool totals
+        totalInsuranceRefunds += refundAmount;
+        
+        emit Events.InsuranceRefundDistributed(asset, refundAmount, latestPeriodId);
     }
     
     /**

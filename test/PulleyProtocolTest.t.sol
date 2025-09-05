@@ -150,7 +150,7 @@ contract PulleyProtocolTest is Test {
         permissionManager.grantPermission(address(controller), PulTradingPool.recordPeriodLoss.selector);
         
         permissionManager.grantPermission(address(tradingPool), PulleyController.receiveFunds.selector);
-        permissionManager.grantPermission(aiTrader, PulleyController.reportTradingResult.selector);
+        permissionManager.grantPermission(aiTrader, PulleyController.checkAIWalletPnL.selector);
     }
     
     function _mintTokensToUsers() internal {
@@ -361,7 +361,7 @@ contract PulleyProtocolTest is Test {
         int256 profitPnL = 500 * 1e18; // $500 profit
         
         vm.prank(aiTrader);
-        controller.reportTradingResult(requestId, profitPnL);
+        controller.checkAIWalletPnL(address(usdc));
         
         // Verify profit was distributed
         (uint256 totalInsurance, uint256 totalTrading, uint256 totalProfits, ) = 
@@ -463,7 +463,7 @@ contract PulleyProtocolTest is Test {
         int256 profit = 800 * 1e18; // $800 profit
         
         vm.prank(aiTrader);
-        controller.reportTradingResult(requestId, profit);
+        controller.checkAIWalletPnL(address(usdc));
         console.log("AI trading profit reported");
         
         // 5. Profits distributed

@@ -129,7 +129,7 @@ contract SimplePulleyTest is Test {
         // Grant permissions for runtime operations
         permissionManager.grantPermission(address(controller), PulTradingPool.recordProfit.selector);
         permissionManager.grantPermission(address(controller), PulTradingPool.recordLoss.selector);
-        permissionManager.grantPermission(address(aiTrader), PulleyController.reportTradingResult.selector);
+        permissionManager.grantPermission(address(aiTrader), PulleyController.checkAIWalletPnL.selector);
         permissionManager.grantPermission(address(tradingPool), PulleyController.receiveFunds.selector);
     }
     
@@ -210,7 +210,7 @@ contract SimplePulleyTest is Test {
         int256 profit = 1000 * 1e18; // 1000 USD profit
         
         vm.prank(aiTrader);
-        controller.reportTradingResult(requestId, profit);
+        controller.checkAIWalletPnL(address(usdc));
         
         // Check metrics
         ( , , uint256 totalProfits, ) = controller.getSystemMetrics();
@@ -226,7 +226,7 @@ contract SimplePulleyTest is Test {
         int256 loss = -500 * 1e18; // 500 USD loss
         
         vm.prank(aiTrader);
-        controller.reportTradingResult(requestId, loss);
+        controller.checkAIWalletPnL(address(usdc));
         
         // Check metrics
         ( , , , uint256 totalLosses) = controller.getSystemMetrics();
@@ -294,7 +294,7 @@ contract SimplePulleyTest is Test {
         // 4. Simulate profit
         bytes32 requestId = bytes32(uint256(1));
         vm.prank(aiTrader);
-        controller.reportTradingResult(requestId, 2000 * 1e18); // 2000 USD profit
+        controller.checkAIWalletPnL(address(usdc));
         
         // 5. Check final metrics
         ( , , uint256 totalProfits, ) = controller.getSystemMetrics();

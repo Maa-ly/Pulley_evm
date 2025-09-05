@@ -26,6 +26,7 @@ contract DeployScript is Script {
     // Mock contracts (for testing)
     MockERC20 public usdc;
     MockERC20 public usdt;
+    MockERC20 public s_token;
     MockBlocklockSender public blocklockSender;
     
     // Configuration
