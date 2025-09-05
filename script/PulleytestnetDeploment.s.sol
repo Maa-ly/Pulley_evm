@@ -37,7 +37,7 @@ contract DeployScript is Script {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
         console.log("Deployer:", deployer);
-        vm.createSelectFork(vm.rpcUrl("kaiatestnet"));
+        vm.createSelectFork(vm.rpcUrl("sonicchain"));
         vm.startBroadcast(deployerPrivateKey);
 
         console.log("Deploying Simplified Pulley Protocol...");
