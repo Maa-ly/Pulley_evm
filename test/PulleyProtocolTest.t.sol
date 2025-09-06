@@ -337,10 +337,10 @@ contract PulleyProtocolTest is Test {
         controller.fundAutomation{value: 0.5 ether}();
         
         // Test automated profit/loss check
-        controller.automatedProfitLossCheck{value: 0.1 ether}();
+        // controller.automatedProfitLossCheck{value: 0.1 ether}(); // Function removed
         
         // Test automated rebalancing
-        controller.automatedRebalancing{value: 0.1 ether}();
+        // controller.automatedRebalancing{value: 0.1 ether}(); // Function removed
         
         // Verify automation was triggered (check events)
         // In a real test, you'd verify the Blocklock integration

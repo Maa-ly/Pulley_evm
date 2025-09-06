@@ -7,8 +7,6 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IPermissionManager} from "./Permission/interface/IPermissionManager.sol";
 import {AbstractBlocklockReceiver} from "blocklock-solidity/AbstractBlocklockReceiver.sol";
-import {TypesLib} from "blocklock-solidity/libraries/TypesLib.sol";
-import {BLS} from "blocklock-solidity/libraries/BLS.sol";
 import "./Token/PulleyToken.sol";
 import "./wallet.sol";
 
@@ -301,31 +299,18 @@ contract PulleyController is ReentrancyGuard, AbstractBlocklockReceiver {
      * @notice Automated profit/loss checking using Blocklock
      * @dev This function is called automatically based on time conditions
      */
-    function automatedProfitLossCheck() external payable {
-        // TODO: Implement Blocklock automation
-        // For now, just emit an event
-        emit Events.AutomationTriggered("profit_loss_check", block.timestamp);
-    }
     
     /**
      * @notice Automated rebalancing using Blocklock
      */
-    function automatedRebalancing() external payable {
-        // TODO: Implement Blocklock automation
-        // For now, just emit an event
-        emit Events.AutomationTriggered("rebalancing", block.timestamp);
-    }
     
     /**
      * @notice Handle Blocklock callback for automated actions
      * @param decryptionKey The decryption key
      */
     function _onBlocklockReceived(uint256 /* _requestId */, bytes calldata decryptionKey) internal override {
-        // Decode the automated action
-        // In a real implementation, you would decrypt the ciphertext here
-        
-        // Trigger appropriate automated action based on the decrypted data
-        _executeAutomatedAction(bytes32(decryptionKey));
+        // Minimal implementation - just emit event
+        emit Events.AutomationTriggered("blocklock_received", block.timestamp);
     }
     
     // ============ Internal Functions ============
@@ -472,17 +457,6 @@ contract PulleyController is ReentrancyGuard, AbstractBlocklockReceiver {
      * @notice Execute automated action based on decryption key
      * @param decryptionKey Decryption key from Blocklock
      */
-    function _executeAutomatedAction(bytes32 decryptionKey) internal {
-        // In a real implementation, this would decode the action from the decryption key
-        // For now, we'll implement basic automated actions
-        
-        // Example: Automated rebalancing
-        if (uint256(decryptionKey) % 2 == 0) {
-            _performAutomatedRebalancing();
-        } else {
-            _performAutomatedProfitCheck();
-        }
-    }
     
     /**
      * @notice Perform automated rebalancing
