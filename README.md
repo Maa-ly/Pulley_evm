@@ -3,6 +3,7 @@
 Pulley Protocol is a DeFi trading system that enables users to participate in AI-driven trading strategies while providing insurance coverage through a floating stablecoin mechanism. The system features Chainlink price feeds, automated profit/loss distribution, and dual minting logic for insurance coverage.
 
 ## System Architecture Overview
+## System Architecture Overview
 
 ```mermaid
 graph TB
@@ -19,9 +20,19 @@ graph TB
     
     subgraph "Factory & Cloning"
         CF[ClonePuLTrade<br/>- Strategy creation<br/>- Pool cloning<br/>- Controller setup]
+        TP[PuLTradingPool<br/>- User deposits<br/>- Trading periods<br/>- Profit distribution]
+        PT[PulleyToken<br/>- Insurance stablecoin<br/>- Floating price mechanism<br/>- Loss coverage]
+        PC[PulleyController<br/>- Fund allocation<br/>- AI coordination<br/>- PnL reporting]
+        AW[AI Wallet<br/>- Fund management<br/>- ECDSA signatures<br/>- Trading execution]
+    end
+    
+    subgraph "Factory & Cloning"
+        CF[ClonePuLTrade<br/>- Strategy creation<br/>- Pool cloning<br/>- Controller setup]
     end
     
     subgraph "External Systems"
+        AI[AI System<br/>- CFD Trading<br/>- Strategy execution]
+        CL[Chainlink<br/>- Price feeds<br/>- Oracle data]
         AI[AI System<br/>- CFD Trading<br/>- Strategy execution]
         CL[Chainlink<br/>- Price feeds<br/>- Oracle data]
         BL[Blocklock<br/>- Automation<br/>- Timelock encryption]
@@ -34,10 +45,16 @@ graph TB
     U -->|Deposit assets| TP
     TP -->|Pool tokens| U
     TP -->|Funds when threshold| PC
+    TP -->|Funds when threshold| PC
     PC -->|15% insurance| PT
     PC -->|85% trading| AW
     AW -->|Trading results| PC
+    PC -->|85% trading| AW
+    AW -->|Trading results| PC
     PC -->|Profit/loss| TP
+    CF -->|Create strategies| TP
+    CF -->|Create strategies| PC
+    CF -->|Create strategies| AW
     CF -->|Create strategies| TP
     CF -->|Create strategies| PC
     CF -->|Create strategies| AW
@@ -47,33 +64,43 @@ graph TB
     PM -->|Permissions| PT
     PM -->|Permissions| PC
     PM -->|Permissions| AW
+    PM -->|Permissions| AW
 ```
 
+## Complete Trading Flow
 ## Complete Trading Flow
 
 ```mermaid
 sequenceDiagram
     participant U as User
+    participant U as User
     participant TP as TradingPool
+    participant PC as PulleyController
     participant PC as PulleyController
     participant PT as PulleyToken
     participant AW as AI Wallet
     participant AI as AI System
+    participant AI as AI System
 
+    Note over U,AI: 1. User Deposit & Period Creation
+    U->>TP: deposit(asset, amount)
     Note over U,AI: 1. User Deposit & Period Creation
     U->>TP: deposit(asset, amount)
     TP->>TP: record user contribution in period
     TP->>TP: update assetAvailableForTrading
     
     Note over U,AI: 2. Threshold Check & Fund Allocation
+    Note over U,AI: 2. Threshold Check & Fund Allocation
     alt funds reach threshold
         TP->>PC: _sendFundsToControllerForPeriod()
         PC->>PC: allocate 15% insurance, 85% trading
         PC->>PT: mint insurance tokens (15%)
         PC->>AW: receiveFunds(85% of funds)
+        PC->>AW: receiveFunds(85% of funds)
         AW->>AW: track initial balance
     end
     
+    Note over U,AI: 3. AI Trading Execution
     Note over U,AI: 3. AI Trading Execution
     AW->>AI: execute CFD trading
     AI->>AW: trading results
@@ -92,13 +119,30 @@ sequenceDiagram
         PC->>TP: distributeInsuranceRefund()
         TP->>U: refund 15% insurance portion
     end
+    Note over U,AI: 4. PnL Reporting & Fund Retrieval
+    PC->>AW: reportTradingResults() - calls getSessionInfo()
+    AW-->>PC: returns PnL data
+    alt if profit > 0
+        PC->>AW: sendFunds(signature) - retrieve profits
+        AW->>PC: transfer profits back
+        PC->>TP: distributePeriodProfit()
+        TP->>U: claimPeriodProfit()
+    else if loss > 0
+        PC->>PT: coverLoss() - burn insurance tokens
+        PC->>TP: distributeInsuranceRefund()
+        TP->>U: refund 15% insurance portion
+    end
 ```
 
+## Contract Architecture & Relationships
 ## Contract Architecture & Relationships
 
 ```mermaid
 classDiagram
     class PuLTradingPool {
+        +address controller
+        +address pulleyToken
+        +address permissionManager
         +address controller
         +address pulleyToken
         +address permissionManager
@@ -110,6 +154,7 @@ classDiagram
         +_startNewTradingPeriod(address asset, uint256 amount)
         +distributePeriodProfit(address asset, uint256 profit, uint256 periodId)
         +recordPeriodLoss(address asset, uint256 loss, uint256 periodId)
+        +distributeInsuranceRefund(address asset, uint256 periodId)
         +distributeInsuranceRefund(address asset, uint256 periodId)
         +claimPeriodProfit(address asset, uint256 periodId, bool reinvest)
     }
@@ -126,6 +171,7 @@ classDiagram
         +addProfits(uint256 profitAmount)
         +getCurrentPrice()
         +getGrowthMetrics()
+        +getGrowthMetrics()
     }
     
     class PulleyController {
@@ -133,10 +179,37 @@ classDiagram
         +address pulleyToken
         +address aiWallet
         +address permissionManager
+        +address pulleyToken
+        +address aiWallet
+        +address permissionManager
         +receiveFunds(address asset, uint256 amount)
         +reportTradingResults(address asset)
         +checkAIWalletPnL(address asset)
+        +reportTradingResults(address asset)
+        +checkAIWalletPnL(address asset)
         +getSystemMetrics()
+        +setAIWallet(address payable _aiWallet)
+    }
+    
+    class Wallet {
+        +address controller
+        +address aiSigner
+        +mapping(address => uint256) balances
+        +receiveFunds(address asset, uint256 amount)
+        +sendFunds(address asset, uint256 amount, bytes signature)
+        +getSessionInfo() returns (int256 pnl, uint256 initialBalance, uint256 currentBalance)
+        +getCurrentPnL(address asset)
+        +updateAISigner(address newSigner)
+    }
+    
+    class ClonePuLTrade {
+        +address tradingPoolImplementation
+        +address controllerImplementation
+        +address walletImplementation
+        +address pulleyToken
+        +createClone(PoolCloneConfig config)
+        +quickCreateClone(address nativeAsset, address customAsset, uint8 customAssetDecimals)
+        +_configureCloneAssets(address pool, PoolCloneConfig config)
         +setAIWallet(address payable _aiWallet)
     }
     
@@ -171,6 +244,11 @@ classDiagram
     PuLTradingPool --> PulleyController : sends funds for periods
     PuLTradingPool --> PulleyToken : queries insurance
     PulleyController --> PulleyToken : mints insurance tokens
+    PulleyController --> Wallet : manages AI wallet
+    Wallet --> PulleyController : reports PnL
+    ClonePuLTrade --> PuLTradingPool : creates pool instances
+    ClonePuLTrade --> PulleyController : creates controller instances
+    ClonePuLTrade --> Wallet : creates wallet instances
     PulleyController --> Wallet : manages AI wallet
     Wallet --> PulleyController : reports PnL
     ClonePuLTrade --> PuLTradingPool : creates pool instances
