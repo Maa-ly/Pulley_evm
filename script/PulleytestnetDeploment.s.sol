@@ -256,7 +256,7 @@ contract DeployScript is Script {
 
     function _logDeployment() internal {
         console.log("=== DEPLOYMENT COMPLETE ===");
-        console.log("Network: Kairos Testnet");
+        console.log("Network: sonic Testnet");
         console.log("Deployer:", msg.sender);
         console.log("");
         
