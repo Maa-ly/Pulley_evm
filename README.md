@@ -564,3 +564,18 @@ Health Score = (Available Liquidity / Total Deposits) × (1 - Utilization Rate)
 | `ClonePuLTrade` | Strategy creation factory | `quickCreateClone()`, `createClone()` |
 | `PermissionManager` | Access control | `grantPermission()`, `hasPermissions()` |
 
+## Address
+  === CORE CONTRACTS ===
+  PermissionManager: 0xDba4B629FA01436E0f6849B54B4744ef65a53FDa
+  Wallet: 0xCc323BC5DE01A1F3ab8F79CDdF49Fe9017375e74
+  PulleyToken: 0xDfC78De351B42788F9a3704E60f1DEF108cCcDe2
+  Clone Factory: 0x9f3C93dD934998B9B334bAd67fAC405733FcD98b
+  
+  === MAIN TRADING POOL (CREATED VIA CLONE) ===
+  TradingPool: 0x44E7Efb96eB7D1677A6144285c81b8378661BbF8
+  Controller: 0x0f3467e867760c8b188C46c5A283a88c90599E25
+  
+  === MOCK TOKENS ===
+  USDC: 0xf63915eEB4d7d8f17f597CD3E2d749C8A43CF9F4
+  USDT: 0x187af3FFbdF71172B217B8Ada11f39224FbCf935
+  sToken: 0x63a2fB46b32CDF7DB176dd59d91Ef89D23E859d1
